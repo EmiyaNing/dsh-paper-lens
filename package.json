@@ -1,0 +1,62 @@
+{
+  "name": "@local/paper-translator",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Paper Lens — bilingual LaTeX paper reader for the DeepSeek Harness Web GUI",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "src/**/*.js",
+    "src/**/*.jsx",
+    "locale/*.json",
+    "icon.svg",
+    "assets/pdf.worker.mjs",
+    "skills/**/*",
+    "README.md",
+    "README.zh.md",
+    "LICENSE",
+    "DESIGN.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build-client.mjs",
+    "test": "node test/parser.test.mjs",
+    "test:ui": "node test/mount-smoke.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "katex": "^0.16.21",
+    "pdfjs-dist": "^4.10.38",
+    "jsdom": "^25.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "latex",
+    "translation",
+    "paper",
+    "pdf"
+  ]
+}

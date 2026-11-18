@@ -1,0 +1,3 @@
+- insert:
+    - id: paper-translator
+      name: '@local/paper-translator'
