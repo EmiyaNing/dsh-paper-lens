@@ -1,9 +1,8 @@
 # 论文对照 · Paper Lens
 
-中文文档已经合并进主 README，用页内锚点切换，不会再跳到另一个文件页面：
+中文文档已合并进主 README 的「简体中文」折叠块，英文文档默认展开，两者都在同一页面内：
 
-- [**简体中文**（README.md → 中文部分）](README.md#中文)
-- [**English**（README.md → English）](README.md#english)
-- [回到仓库首页](README.md)
+- [打开 README.md](README.md) → 点击页面顶部的 **▶ 简体中文** 展开中文，点击 **▼ English** 收起英文
+- [English documentation](README.md)（默认展开）
 
-> This file only redirects. The Chinese and English documentation now live in [`README.md`](README.md): [中文](README.md#中文) · [English](README.md#english).
+> 这个文件只是跳转说明，不再单独维护中文正文；正文在 [`README.md`](README.md)。
