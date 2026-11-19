@@ -7,6 +7,8 @@
  * translation and a pin on the corresponding paper block.
  */
 
+import { anchorFor } from '../shared/reviews.js'
+import { retrievePassages } from './retrieval.js'
 import { callModel, TranslationError } from './translator.js'
 
 function extractJson(text) {
@@ -21,18 +23,6 @@ function extractJson(text) {
   } catch {
     return null
   }
-}
-
-function paperBlocks(entry) {
-  return entry.data.blocks
-    .filter((block) => block.translatable && block.text)
-    .slice(0, 140)
-    .map((block) => ({
-      id: block.id,
-      section: block.section || '',
-      kind: block.kind || 'paragraph',
-      text: String(block.text).slice(0, 900),
-    }))
 }
 
 function targetLabel(target) {
@@ -53,17 +43,21 @@ function splitParagraphs(text) {
 
 function normalizeResult(raw, blocks, text, paragraphCount) {
   if (!raw || typeof raw !== 'object') return null
-  const ids = new Set(blocks.map((block) => block.id))
+  const byId = new Map(blocks.map(block => [block.id, block]))
   const matchMap = new Map()
   for (const match of Array.isArray(raw.matches) ? raw.matches : []) {
     if (!match || typeof match !== 'object') continue
     const id = typeof match.id === 'string' ? match.id.trim() : ''
     const blockId = typeof match.blockId === 'string' ? match.blockId.trim() : ''
-    if (!id || !blockId || !ids.has(blockId) || matchMap.has(id)) continue
+    const quote = typeof match.quote === 'string' ? match.quote.trim() : ''
+    if (!id || !quote || !text.includes(quote) || matchMap.has(id)) continue
+    const candidate = byId.get(blockId)
+    const evidence = typeof match.evidence === 'string' ? match.evidence.trim() : ''
+    const verified = candidate && evidence && candidate.text.includes(evidence)
+    const scope = verified ? 'passage' : ['general', 'experiment'].includes(match.scope) ? match.scope : 'unlocated'
     matchMap.set(id, {
-      id,
-      blockId,
-      quote: typeof match.quote === 'string' ? match.quote.trim() : '',
+      id, quote, scope, blockId: verified ? blockId : null,
+      evidence: verified ? evidence : '', anchor: verified ? anchorFor(candidate) : null,
       reason: typeof match.reason === 'string' ? match.reason.trim() : '',
     })
   }
@@ -87,7 +81,8 @@ function normalizeResult(raw, blocks, text, paragraphCount) {
 }
 
 export async function analyzeRebuttal(ctx, cfg, entry, text, target, signal) {
-  const blocks = paperBlocks(entry)
+  const paragraphs = splitParagraphs(text)
+  const blocks = retrievePassages(entry.data.blocks, paragraphs)
   if (!blocks.length) throw new TranslationError('rebuttal/no-blocks', '当前论文没有可匹配的正文段落')
   const system = `You translate and cross-reference paper rebuttals.
 
@@ -98,29 +93,20 @@ paragraph structure exactly: one or more consecutive segments per paragraph,
 no paragraph merged with another, and no paragraph omitted. A segment may be a
 sentence or a clause; do not omit, summarize, or reorder content.
 
-For each segment that refers to a specific place in the paper, attach a match.
-Each match must point at exactly one paper block id from the supplied list.
-Use the original rebuttal quote for the match, and a one-sentence reason.
-
-## Rules
-1. Return JSON only:
-   {"segments":[{"text":"translated text","paragraph":1,"matchId":"m1"}],"matches":[{"id":"m1","quote":"original rebuttal excerpt","blockId":"b12","reason":"why this block"}]}
-2. Every segment must include paragraph, a 1-based integer from the supplied
-   paragraphs array. Every paragraph 1..N must have at least one segment.
-   Do not merge or split paragraphs across these indices.
-3. Every matchId in a segment must exist in matches. Omit matchId when the
-   segment is general and does not point at a paper block.
-4. Only use blockId values from the supplied paper blocks. Never invent ids.
-5. A match's quote must be copied from the rebuttal, not translated.
-6. Matches are one-to-one: one match points at one block. Do not attach two
-   matches to the same block unless the rebuttal clearly needs it.
+Split actionable concerns, including multiple concerns in one paragraph. Give each
+concern a match, also when no source passage exists. Set scope to passage,
+general, experiment (new experiment needed) or unlocated. For a passage copy
+a short exact paper excerpt as evidence and its supplied block id. With other
+scopes omit blockId and evidence. Copy quote verbatim from the reviewer. Keep
+each segment's paragraph index and all content, including general remarks.
+Return JSON only:
+{"segments":[{"text":"translated text","paragraph":1,"matchId":"m1"}],"matches":[{"id":"m1","scope":"passage","quote":"reviewer's exact words","blockId":"b12","evidence":"exact paper excerpt","reason":"why this passage"}]}
 7. Do not add commentary, markdown fences, or fields other than the schema.
 8. Preserve formulas, citations, numbers, and technical terms accurately.
 9. Write each reason in the target language.
 
 Return the complete translation in ${targetLabel(target)}.`
 
-  const paragraphs = splitParagraphs(text)
   const payload = {
     targetLanguage: targetLabel(target),
     rebuttal: String(text ?? ''),
@@ -155,7 +141,7 @@ Return the complete translation in ${targetLabel(target)}.`
       }
     }
     const parsed = extractJson(reply.text)
-    const result = normalizeResult(parsed, blocks, text, paragraphs.length)
+    const result = normalizeResult(parsed, entry.data.blocks.filter(block => blocks.some(item => item.id === block.id)), text, paragraphs.length)
     if (result) return { ...result, usage }
     lastFailure = 'schema, paragraph indices or block ids'
   }

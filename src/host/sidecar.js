@@ -30,6 +30,7 @@ export class ProjectSidecar {
     this.byBlock = new Map()
     this.dirty = false
     this.timer = null
+    this.writing = Promise.resolve()
     this.migrated = false
     this.usage = emptyUsage()
   }
@@ -136,21 +137,26 @@ export class ProjectSidecar {
     if (typeof this.timer.unref === 'function') this.timer.unref()
   }
 
-  async flush() {
-    if (!this.dirty && this.timer) return
-    this.dirty = false
-    const payload = {
-      version: 1,
-      generator: 'paper-translator/0.1.0',
-      migrated: true,
-      updatedAt: new Date().toISOString(),
-      entries: this.entries,
-      usage: this.usage,
-    }
-    await mkdir(dirname(this.paths.json), { recursive: true })
-    const tmp = `${this.paths.json}.${process.pid}.tmp`
-    await writeFile(tmp, JSON.stringify(payload), { mode: 0o600 })
-    await rename(tmp, this.paths.json)
+  flush() {
+    const write = this.writing.then(async () => {
+      if (!this.dirty) return
+      this.dirty = false
+      const payload = JSON.stringify({
+        version: 1, generator: 'paper-translator', migrated: true,
+        updatedAt: new Date().toISOString(), entries: this.entries, usage: this.usage,
+      })
+      try {
+        await mkdir(dirname(this.paths.json), { recursive: true })
+        const tmp = this.paths.json + '.' + process.pid + '.tmp'
+        await writeFile(tmp, payload, { mode: 0o600 })
+        await rename(tmp, this.paths.json)
+      } catch (error) {
+        this.dirty = true
+        throw error
+      }
+    })
+    this.writing = write.catch(() => {})
+    return write
   }
 
   async clear() {

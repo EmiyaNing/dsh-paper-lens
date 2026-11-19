@@ -584,6 +584,8 @@ function validate(block, translated) {
 - 写回失败/重新解析找不到新 block 时，恢复原文件，避免把论文写坏。
 - 限制：中文编辑会简化段落内 `\textbf{}`、`\emph{}` 等格式（v1 只保留公式/引用/URL）；要保留格式请用英文原始片段编辑。
 
+v0.3 的客户端先调用 `POST /block/preview` 生成候选英文。采纳时将预览文本及原段快照发送给 `/block/rewrite`。Host 重新读取源文件并核对段落，成功后记录修改历史。`POST /block/undo` 按修订 ID 校验并恢复该段。客户端和 Host 共用章节、文件、原句及修改历史来解析意见位置。
+
 ### 9.3 PDF 缩放
 
 - 右上角 `− 100% +` 工具栏；100% = 适应栏宽，点击百分比重置；范围 50%–300%，存 localStorage。
@@ -602,7 +604,7 @@ function validate(block, translated) {
 - 每个 match 对应一个 block；浏览器用 match 序号同时渲染返修译文高亮和论文 block pin，点击后 `selectBlock`，实现一一对应定位。
 - 浏览器按 `paragraph` 分组渲染 `<p>`，保留原文段落；旧版结果没有 `paragraph` 字段时，客户端会丢弃结果但保留输入，提示用户重新分析，避免把旧结果当成已分段。
 - `POST /rebuttal/overview`（`{projectId,reviewers:[{id,name,text}],target}`）调用 `overview.js`：输出 `summary`、每审稿人的 `attitude/score/summary/evidence`、`overlaps`（>=2 reviewerIds）和 `unique`（单 reviewerId）。Host 校验 reviewer id 和 attitude，要求每位审稿人恰好出现一次；总览语言跟随设置里的目标语言。
-- 总览明确要求只根据审稿人自己的语言判断态度；若文本混有作者 rebuttal，忽略作者辩护。结果只存浏览器 localStorage，不写论文文件；模型调用计入 sidecar 用量和全局 ledger。
+- 总览明确要求只根据审稿人自己的语言判断态度；若文本混有作者 rebuttal，忽略作者辩护。返修记录与术语由带版本校验的 `POST /review/save` 保存在主文件旁的 `.paper-lens.review.json`，打开旧项目时读取浏览器存档；模型调用计入 sidecar 用量和全局 ledger。
 
 ### 9.5 Token 用量与费用
 

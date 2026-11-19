@@ -13,6 +13,7 @@ await build({
   platform: 'browser',
   target: ['chrome110', 'safari16'],
   jsx: 'transform',
+  loader: { '.css': 'text' },
   external: ['react'],
   outfile: join(root, 'client.js'),
   minify: true,

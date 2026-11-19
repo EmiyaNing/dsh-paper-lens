@@ -5,6 +5,9 @@
  */
 
 import { readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { readRevisionStore, writeRevisionStore, withRevisionLock } from './revision-store.js'
+import { syncLocation } from './synctex.js'
 import { join, resolve } from 'node:path'
 import { compileProject } from './compile.js'
 import { shortHash } from './cache.js'
@@ -106,11 +109,11 @@ function validateRoot(root) {
   return resolve(root.trim())
 }
 
-function cachedTranslations(entry, cfg, target = cfg.targetLanguage) {
+function cachedTranslations(entry, cfg, target = cfg.targetLanguage, glossary = {}) {
   const translations = {}
   for (const block of entry.data.blocks) {
     if (!block.translatable || !block.text) continue
-    const key = cacheKeyFor(cfg, target, {}, block.text)
+    const key = cacheKeyFor(cfg, target, glossary, block.text)
     const text = entry.sidecar.get(key)
     if (text) translations[block.id] = text
   }
@@ -225,24 +228,40 @@ async function locateBlockInFile(project, block) {
     }
     index = content.indexOf(needle, index + 1)
   }
-  if (best < 0) {
+  if (best < 0 || best >= (lineStarts[block.fileLine] ?? Infinity) || best < target) {
     throw new TranslationError('rewrite/not-located', '源文件里找不到该段落的原始内容，可能已被修改；请刷新后重试')
   }
-  return { path, content, start: best, end: best + needle.length }
+  return { path, raw, content, start: best, end: best + needle.length }
+}
+
+async function swapFile(path, expected, bytes) {
+  const tmp = path + '.' + randomUUID() + '.tmp'
+  await writeFile(tmp, bytes, { mode: (await stat(path)).mode })
+  try {
+    if (await readFile(path, 'utf8') !== expected) {
+      throw new TranslationError('rewrite/conflict', '源文件已变化，请刷新 / Source changed; refresh the preview')
+    }
+    await rename(tmp, path)
+  } finally {
+    await unlink(tmp).catch(() => {})
+  }
 }
 
 async function replaceSource(located, replacement) {
-  const next = located.content.slice(0, located.start) + replacement + located.content.slice(located.end)
-  const tmp = `${located.path}.${process.pid}.paper-lens.tmp`
-  await writeFile(tmp, next, 'utf8')
-  await rename(tmp, located.path)
-}
-
-function findRewrittenBlock(data, oldBlock, replacement) {
-  const sameFile = data.blocks.filter((block) => block.file === oldBlock.file)
-  const exact = sameFile.find((block) => block.source.trim() === replacement.trim())
-  if (exact) return exact
-  return sameFile.find((block) => block.kind === oldBlock.kind && Math.abs(block.fileLine - oldBlock.fileLine) <= 3) ?? null
+  const { raw, start, end } = located
+  // Parser offsets count CRLF as one character. Slice the original bytes so
+  // unrelated lines retain their own line endings, including in mixed files.
+  let physical = 0
+  let begin = 0
+  for (let normalized = 0; normalized < end; normalized++) {
+    if (normalized === start) begin = physical
+    if (raw[physical] === '\r' && raw[physical + 1] === '\n') physical++
+    physical++
+  }
+  const newline = raw.slice(begin).match(/\r\n|[\r\n]/)?.[0] ?? '\n'
+  const bytes = raw.slice(0, begin) + replacement.replace(/\r\n?|\n/g, newline) + raw.slice(physical)
+  await swapFile(located.path, raw, bytes)
+  return bytes
 }
 
 function chineseFor(entry, cfg, block, glossary = {}) {
@@ -373,14 +392,15 @@ export function registerRoutes(ctx, cfg, options = {}) {
       const root = validateRoot(body.root)
       const data = await loadProject(root, body.mainFile ?? 'main.tex')
       const id = projectIdFor(data.root, data.mainFile)
-      const sidecar = await new ProjectSidecar(data.mainPath, legacyDir).load()
-      const entry = putEntry({ id, root: data.root, mainFile: data.mainFile, data, sidecar, lastAccess: Date.now() })
+      const sidecar = getEntry(id)?.sidecar ?? await new ProjectSidecar(data.mainPath, legacyDir).load()
+      const entry = putEntry(Object.assign(getEntry(id) ?? {}, { id, root: data.root, mainFile: data.mainFile, data, sidecar, lastAccess: Date.now() }))
       await ledger.syncProject(entry.id, entry.sidecar.usage)
       await ledger.flush().catch(() => {})
-      const translations = cachedTranslations(entry, cfg)
+      const review = await readRevisionStore(data.mainPath)
+      const translations = cachedTranslations(entry, cfg, body.target, review.workspace?.glossary ?? body.glossary)
       await refreshMarkdown(entry, cfg)
       return json(serialize(entry, {
-        translations,
+        translations, review,
         usage: usageTotals(entry, cfg),
         globalUsage: globalUsageView(ledger, cfg),
       }))
@@ -399,11 +419,12 @@ export function registerRoutes(ctx, cfg, options = {}) {
       entry.lastAccess = Date.now()
       await ledger.syncProject(entry.id, entry.sidecar.usage)
       await ledger.flush().catch(() => {})
-      const translations = cachedTranslations(entry, cfg)
+      const translations = cachedTranslations(entry, cfg, body.target, body.glossary)
       await refreshMarkdown(entry, cfg)
       return json(serialize(entry, {
         changed,
         removed,
+        history: (await readRevisionStore(data.mainPath)).history,
         translations,
         usage: usageTotals(entry, cfg),
         globalUsage: globalUsageView(ledger, cfg),
@@ -416,7 +437,7 @@ export function registerRoutes(ctx, cfg, options = {}) {
       if (!entry) return fail(404, 'project/not-found', '项目已失效，请重新打开')
       const files = [entry.data.mainPath, ...entry.data.files.map((range) => resolve(entry.root, range.path))]
       const texMtime = await maxMtime(files)
-      const pdfMtime = entry.data.pdf?.mtime ?? 0
+      const pdfMtime = await maxMtime([entry.data.mainPath.replace(/\.tex$/i, '.pdf')])
       return json({ texMtime, pdfMtime, pdfExists: Boolean(entry.data.pdf), sig: `${texMtime}:${pdfMtime}` })
     })))
 
@@ -546,109 +567,121 @@ export function registerRoutes(ctx, cfg, options = {}) {
       }
     })))
 
-    disposers.push(register('/api/paper-translator/block/rewrite', ['POST'], safe(async (request) => {
-      const body = await readJson(request)
-      const entry = getEntry(body.projectId)
-      if (!entry) return fail(404, 'project/not-found', '项目已失效，请重新打开')
-      const block = entry.data.blocks.find((item) => item.id === body.blockId)
-      if (!block) return fail(404, 'block/not-found', '找不到对应的段落，请刷新后重试')
-      if (!block.translatable) return fail(400, 'block/not-translatable', '这个 block 不支持文本编辑')
-      const glossary = body.glossary && typeof body.glossary === 'object' ? body.glossary : {}
-      const mode = typeof body.chineseText === 'string' ? 'zh' : typeof body.englishSource === 'string' ? 'en' : ''
-      if (!mode) return fail(400, 'rewrite/bad-request', '缺少 chineseText 或 englishSource')
-
-      const located = await locateBlockInFile(entry.data, block)
-      const originalContent = located.content
-      let replacement
-      let chineseText = null
-      let translationError = null
-
-      try {
-        if (mode === 'zh') {
-          const edited = body.chineseText
-          if (!edited.trim()) return fail(400, 'rewrite/empty', '中文内容为空')
-          if (!sameTokens(edited, block.text)) {
-            return fail(400, 'rewrite/placeholder-mismatch', '中文内容里的 ⟦M1⟧ 占位符数量/顺序必须与原段落一致')
-          }
-          const inputBlock = { ...block, text: edited }
-          let out
-          try {
-            out = await translateBatch(
-              ctx,
-              { ...cfg, sourceLanguage: 'zh-CN', targetLanguage: 'en' },
-              [inputBlock],
-              rewriteContext(entry, cfg, block, 'zh', glossary),
-              request.signal,
-            )
-          } catch (error) {
-            return fail(502, 'rewrite/translate-failed', `中文转英文失败：${error?.message ?? error}`)
-          }
-          await addModelUsage(entry, cfg, out.usage, ledger)
-          const result = out.results?.[0]
-          if (!result || result.error) {
-            return fail(502, 'rewrite/translate-failed', `中文转英文失败：${result?.error ?? 'missing'}`)
-          }
-          replacement = reconstructSource(block, result.text)
-          chineseText = edited
-        } else {
-          replacement = body.englishSource
-          if (!replacement.trim()) return fail(400, 'rewrite/empty', '英文内容为空')
-        }
-
-        await replaceSource(located, replacement)
-        const data = await loadProject(entry.root, entry.mainFile)
-        entry.data = data
-        const newBlock = findRewrittenBlock(data, block, replacement)
-        if (!newBlock) {
-          await writeFile(located.path, originalContent, 'utf8')
-          return fail(500, 'rewrite/reparse-failed', '写入后无法重新定位该段落，已恢复原文件')
-        }
-
-        let translated = null
-        if (mode === 'zh') {
-          const key = cacheKeyFor(cfg, 'zh-CN', glossary, newBlock.text)
-          entry.sidecar.set(key, chineseText, newBlock.id)
-          translated = chineseText
-        } else {
-          try {
-            const out = await translateBatch(
-              ctx,
-              { ...cfg, sourceLanguage: 'en', targetLanguage: 'zh-CN' },
-              [newBlock],
-              rewriteContext(entry, cfg, newBlock, 'en', glossary),
-              request.signal,
-            )
-            await addModelUsage(entry, cfg, out.usage, ledger)
-            const result = out.results?.[0]
-            if (!result || result.error) translationError = result?.error ?? 'missing'
-            else {
-              const key = cacheKeyFor(cfg, 'zh-CN', glossary, newBlock.text)
-              entry.sidecar.set(key, result.text, newBlock.id)
-              translated = result.text
-            }
-          } catch (error) {
-            translationError = error?.message ?? String(error)
-          }
-        }
-
-        await entry.sidecar.flush().catch(() => {})
-        await refreshMarkdown(entry, cfg, null, 'zh-CN')
-        const translations = cachedTranslations(entry, cfg)
-        if (translated) translations[newBlock.id] = translated
-        return json(serialize(entry, {
-          rewrittenBlockId: newBlock.id,
-          translations,
-          translationError,
-          changed: true,
-          usage: usageTotals(entry, cfg),
-          globalUsage: globalUsageView(ledger, cfg),
-        }))
-      } catch (error) {
-        await writeFile(located.path, originalContent, 'utf8').catch(() => {})
-        throw error
+    async function preview(entry, block, body, signal) {
+      if (typeof body.chineseText !== 'string') {
+        if (!body.englishSource?.trim()) throw new TranslationError('rewrite/empty', '英文内容为空')
+        return { englishSource: body.englishSource }
       }
-    })))
+      if (!body.chineseText.trim() || !sameTokens(body.chineseText, block.text)) {
+        throw new TranslationError('rewrite/placeholder-mismatch', '请保留公式、引用占位符及其顺序 / Preserve placeholders in order')
+      }
+      const out = await translateBatch(ctx, { ...cfg, sourceLanguage: 'zh-CN', targetLanguage: 'en' },
+        [{ ...block, text: body.chineseText }], rewriteContext(entry, cfg, block, 'zh', body.glossary), signal)
+      await addModelUsage(entry, cfg, out.usage, ledger)
+      const translated = out.results?.[0]?.text
+      if (!translated || !sameTokens(translated, block.text)) throw new TranslationError('rewrite/translation', '英文生成失败 / Invalid English output')
+      return { englishSource: reconstructSource(block, translated) }
+    }
 
+    function revisionRoute(path, handler) {
+      disposers.push(register('/api/paper-translator/' + path, ['POST'], safe(async request => {
+        const body = await readJson(request)
+        const entry = getEntry(body.projectId)
+        if (!entry) return fail(404, 'project/not-found', '项目已失效，请重新打开')
+        return handler(entry, body, request.signal)
+      })))
+    }
+
+    revisionRoute('review/save', (entry, body) => withRevisionLock(async () => {
+      const store = await readRevisionStore(entry.data.mainPath)
+      if (body.version !== store.version) return fail(409, 'review/conflict', '另一窗口已更新返修记录，请重新打开项目后合并 / Review changed in another window')
+      const workspace = body.workspace
+      if (!Array.isArray(workspace?.reviewers) || workspace.reviewers.length > 8 || !workspace.glossary || typeof workspace.glossary !== 'object') {
+        return fail(400, 'review/invalid', '无效的返修记录 / Invalid workspace')
+      }
+      store.workspace = workspace
+      store.version++
+      await writeRevisionStore(entry.data.mainPath, store)
+      return json({ version: store.version })
+    }))
+
+    revisionRoute('synctex', async (entry, body, signal) => json({ location: await syncLocation(entry.data, body, signal) }))
+
+    revisionRoute('block/preview', async (entry, body, signal) => {
+      const block = entry.data.blocks.find(item => item.id === body.blockId)
+      if (!block?.translatable || block.source !== body.original) return fail(409, 'rewrite/conflict', '原段落已改变，请刷新 / Source changed')
+      const proposal = await preview(entry, block, body, signal)
+      return json({ ...proposal, totals: usageTotals(entry, cfg), globalTotals: globalUsageView(ledger, cfg) })
+    })
+
+    async function commit(entry, body, replacement, chinese, undoId, signal) {
+      const result = await withRevisionLock(async () => {
+        const data = await loadProject(entry.root, entry.mainFile)
+        const store = await readRevisionStore(data.mainPath)
+        const previous = undoId && store.history.find(item => item.id === undoId && !item.undone)
+        if (undoId && !previous) return fail(409, 'rewrite/no-undo', '该修改已撤销 / Revision already undone')
+        const original = previous ? previous.after : body.original
+        const id = previous ? previous.afterId : body.blockId
+        const block = data.blocks.find(item => item.id === id && item.source === original &&
+          (!body.file || item.file === body.file) && (!previous || item.file === previous.file))
+        if (!block?.translatable) return fail(409, 'rewrite/conflict', '原段落已变化，请重新核对 / Source has changed')
+        if (block.source.length >= 20000) return fail(400,'rewrite/truncated','该源段落超过编辑长度上限 / Source fragment exceeds the editor limit')
+        const duplicates = data.blocks.filter(item => item.source === original && item.file === block.file)
+        if (duplicates.length > 1 && (block.fileLine !== (previous?.fileLine ?? body.fileLine) || duplicates.filter(item => item.fileLine === block.fileLine).length > 1)) return fail(409, 'rewrite/ambiguous', '有多个相同段落，请重新核对 / Ambiguous paragraph')
+        if (previous) {
+          replacement = previous.before
+          chinese = previous.beforeChinese
+        }
+        if (typeof replacement !== 'string' || !replacement.trim() || replacement === original) return fail(400, 'rewrite/empty', '段落没有改动 / No change')
+        const located = await locateBlockInFile(data, block)
+        const written = await replaceSource(located, replacement)
+        let updated, next
+        try {
+          updated = await loadProject(entry.root, entry.mainFile)
+          next = updated.blocks.find(item => item.file === block.file && item.fileLine === block.fileLine && item.source === replacement.trim() && item.translatable)
+          if (!next) throw new TranslationError('rewrite/reparse-failed', '修改须保留一个可定位的 LaTeX 段落 / Keep one valid LaTeX block')
+          if (previous) previous.undone = true
+          else store.history.push({ id: randomUUID(), file: block.file, fileLine: next.fileLine, section: block.section, beforeId: block.id,
+            afterId: next.id, before: original, after: next.source, beforeChinese: chineseFor(entry, cfg, block, body.glossary),
+            chinese: chinese || '', issue: body.issueLink || null, time: Date.now() })
+          await writeRevisionStore(data.mainPath, store)
+        } catch (error) {
+          if (await readFile(located.path, 'utf8') === written) {
+            await swapFile(located.path, written, located.raw)
+          }
+          throw error
+        }
+        entry.data = updated
+        return { oldId:block.id, next, revisionId:previous?.id ?? store.history.at(-1).id }
+      })
+      if (result instanceof Response) return result
+      const {oldId, next, revisionId} = result
+      let translationError = null
+      if (!chinese && !undoId) {
+        try {
+          const out = await translateBatch(ctx, { ...cfg, sourceLanguage: 'en', targetLanguage: 'zh-CN' }, [next], rewriteContext(entry, cfg, next, 'en', body.glossary), signal)
+          await addModelUsage(entry, cfg, out.usage, ledger)
+          chinese = out.results?.[0]?.text
+          if (!chinese) translationError = out.results?.[0]?.error || 'Translation unavailable'
+        } catch (error) { translationError = error.message }
+      }
+      if (chinese) entry.sidecar.set(cacheKeyFor(cfg, 'zh-CN', body.glossary ?? {}, next.text), chinese, next.id)
+      await entry.sidecar.flush().catch(() => {})
+      await refreshMarkdown(entry, cfg, null, 'zh-CN')
+      return json(serialize(entry, { rewrittenBlockId: next.id, history: (await readRevisionStore(entry.data.mainPath)).history, revisionId, removed: [oldId],
+        translations: cachedTranslations(entry, cfg, 'zh-CN', body.glossary), translationError,
+        changed: true, usage: usageTotals(entry, cfg), globalUsage: globalUsageView(ledger, cfg) }))
+    }
+
+    revisionRoute('block/undo', (entry, body, signal) => commit(entry, body, null, null, body.revisionId || 'missing', signal))
+    revisionRoute('block/rewrite', async (entry, body, signal) => {
+      const block = entry.data.blocks.find(item => item.id === body.blockId)
+      if (!block?.translatable) return fail(409, 'rewrite/conflict', '未找到原段落 / Source block unavailable')
+      // Accept the reviewed bytes. Legacy clients still send just one draft field.
+      const result = typeof body.englishSource === 'string' ? body : await preview(entry, block, body, signal)
+      return commit(entry, { ...body, original: body.original ?? block.source, file: body.file ?? block.file,
+        fileLine: body.fileLine ?? block.fileLine }, result.englishSource, body.chineseText, null, signal)
+    })
 
     disposers.push(register('/api/paper-translator/rebuttal', ['POST'], safe(async (request) => {
       const body = await readJson(request)

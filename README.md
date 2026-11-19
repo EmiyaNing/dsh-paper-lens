@@ -6,7 +6,7 @@
 **DeepSeek Harness 的中英双语 LaTeX 论文阅读插件。** 左侧中文译文，右侧 LaTeX 源码或 PDF；按段落翻译、按段落定位审稿意见，左右两侧都可以编辑并写回 `.tex` 源文件。
 
 - 插件名：`@local/paper-translator`
-- 版本：`0.2.0`
+- 版本：`0.3.0`
 - 已验证：DeepSeek Harness `0.2.2-rc.3`（桌面端与 `dsh web`）
 - 运行时依赖：无（浏览器端打包文件已预构建，宿主端只用 Node 内置模块）
 
@@ -29,13 +29,13 @@
 
 ## 功能
 
-- **左右对照** —— 左侧译文，右侧 LaTeX 源码或 PDF，可自由组合；顶部一个切换器即可在「拆分 / 译文 / 原文 / PDF」之间切换。
+- **阅读与返修** —— 在顶部切换工作模式。在阅读栏头切换拆分、译文、LaTeX 或 PDF。窄窗口按上下排列论文与批注。
 - **按段落翻译** —— 把 LaTeX 项目解析为段落块（章节、正文、图表标题、公式、列表），逐块调用 DSH 已配置的模型路由翻译。
 - **逐块缓存与用量账本** —— 重新打开论文即可恢复已完成的译文；状态栏显示本文与全局的 token 与费用。
-- **写回式编辑** —— 修改中文译文或英文 LaTeX 后保存，源 `.tex` 会被改写并重新翻译该段。
+- **段落修订** —— 修改中文或英文，预览逐词差异后采纳，重新打开该段即可撤销。
 - **可选本地编译** —— 本机装有 TeX 发行版时，工具栏的「编译」会用 `pdflatex` / `latexmk` / `xelatex` 生成 PDF。
 - **返修意见** —— 最多八位审稿人，每位单独粘贴意见，自动翻译并定位到具体段落；点击即可在意见与段落之间跳转；「总览」汇总重叠意见、独有意见与审稿人态度。
-- **术语表与目标语言** —— 支持 `zh-CN`、`zh-TW`、`en`，术语表按安装保存。
+- **项目术语** —— 选中正文术语即可指定译法并定位译文中需要核对的段落。目标语言支持 `zh-CN`、`zh-TW` 和 `en`。
 - **论文般的排版** —— 74 字符行宽、宽松行高、语义化主题色、支持「减弱动效」。
 - **适配壁纸/玻璃主题** —— 启用 [`dsh-plugin-wallpaper-engine`](https://github.com/elysia395/dsh-wallpaper-engine) 时，阅读区保留自己的纸张底板，保证文字在壁纸上依然清晰；同时通过其公开的跨插件标记接入玻璃运行时。
 - **中英双语界面** —— 跟随 DSH 的界面语言。
@@ -95,30 +95,30 @@ dsh plugin --profile desktop add github:<owner>/<repo>
 
 ### 卸载
 
-插件页 → `@local/paper-translator` 卡片 → **移除**，然后重启 DeepSeek Harness。Host 端缓存的译文仍会保留在 `$DSH_HOME/paper-translator`（见[数据与隐私](#数据与隐私)）。
+插件页 → `@local/paper-translator` 卡片 → **移除**，然后重启 DeepSeek Harness。译文与返修记录保存在论文主文件旁（见[数据与隐私](#数据与隐私)）。
 
 ## 首次使用
 
 1. 点击 **打开项目…**，选择包含 `main.tex` 的目录（会弹出系统目录选择器；不支持原生选择器的环境请用 **手动输入路径**）。
 2. 若项目有多个 `.tex` 文件，用项目 chip 右侧的下拉框选择主文件 —— 译文、源码与 PDF 会一起切换到该文件。
-3. 点命令栏的 **重译全部**。段落按批次翻译，进度环显示 `已完成/总数`，完成的段落会进入缓存。
+3. 打开项目后会自动翻译缺少译文的段落。需要重新生成全部译文时，点 **重译全部**。进度环显示 `已完成/总数`，完成的段落会进入缓存。
 4. 用视图切换器在 **拆分 / 译文 / 原文 / PDF** 之间切换；拆分模式下右栏可在 LaTeX 与 PDF 之间切换。
 5. 本机装了 TeX 发行版时，点 **编译** 生成 PDF 并刷新 PDF 栏。
 
 ## 阅读与操作
 
 - **点击**段落即可高亮它以及对应的源码/PDF 位置；**J / K** 切换当前段落，**E** 编辑当前段。
-- **编辑**会打开段落编辑器：可切换中文/英文，保存并翻译会写回 `.tex`；也可先用内置的 *Best-Paper-Writing* 润色一遍再保存。
+- **编辑** 打开段落草稿。点 **预览英文改动** 可检查增删内容，再点 **采纳并写回**。需要恢复时，在同一段的编辑器中点 **撤销本段上次修改**。
 - **状态栏**显示已翻译段数、缓存命中与本文费用；点开可看输入/输出/缓存/调用明细与全局用量。右侧是 **跟随滚动** 开关。
-- **⋯ → 设置** 打开设置面板：目标语言、术语表（JSON）、用量与清空缓存。
-- **⋯ → 返修意见** 打开审稿人面板（见下）。
+- **⋯ → 设置** 提供项目术语、宋体阅读、目标语言和用量。选中正文里的英文术语后，也可以从底栏加入术语表。
+- 有最新 PDF、SyncTeX 映射及命令行工具时，选择段落可定位到 PDF，双击 PDF 可回到对应源段。映射不可用时按篇幅估算页码。
 
 ## 返修意见
 
-1. **⋯ → 返修意见**。每位审稿人一个标签页，最多八位。
-2. 在每个标签页粘贴一位审稿人的意见，点 **翻译并定位**：每条意见都会被翻译并匹配到对应段落。
-3. 点匹配项即可跳到段落；受影响的段落旁与 LaTeX 行号区会出现标记。
-4. **总览** 会汇总各审稿人的态度、多人共同提出的意见，以及只有一人提出的独有意见。
+1. 打开顶部 **返修**，为每位审稿人粘贴一份报告，点击 **翻译并定位**。插件从整篇论文检索候选片段，并核对模型给出的原句。
+2. 在右栏切换意见，左栏同步定位。可选择其他段落并点 **绑定当前选段**，也可将意见标为全文性意见或需要新增实验。
+3. 点 **修改这一段**，用中文起草、预览并采纳英文。另一位审稿人提到同一处时，可在他的意见下关联本段已有修改。
+4. 为每条意见填写回复并标记已回复。**总览** 优先列出尚待回复的共同意见，**导出逐点回复** 按审稿人生成 Markdown，保留待核对项和实验待办。
 
 ## 配置
 
@@ -152,11 +152,11 @@ Host 半区接受 `paper-translator` 行上的以下配置（均可选）：
 | `E` | 编辑当前段落 |
 | `Cmd/Ctrl` + `+` / `-` / `0` | 缩放 PDF（PDF 栏可见时） |
 | `Esc` | 关闭菜单、设置面板或返修面板 |
-| `Cmd/Ctrl` + `Enter` | 保存段落编辑器 |
+| `Cmd/Ctrl` + `Enter` | 预览或采纳当前段落修改 |
 
 ## 数据与隐私
 
-- 译文、用量账本与解析缓存保存在 `$DSH_HOME/paper-translator`（默认 `~/.dsh/paper-translator`）。可用 **设置 → 清空本文缓存 / 清空全部缓存** 清除。
+- 主文件旁的 `<main>.paper-lens.review.json` 保存返修意见、回复、项目术语和已采纳的修改历史。首次打开时读取浏览器中的旧返修记录和术语。译文缓存和译稿分别存入 `<main>.paper-lens.json` 与 `<main>.paper-lens.md`，全局用量保存在 `$DSH_HOME/paper-translator/usage.json`。
 - 只有在你触发翻译、润色或生成总览时，论文文本才会离开本机，并且只走 DSH 已配置的模型路由。
 - 浏览器端通过带鉴权的 `/api/paper-translator/*` 路由与 Host 通信，不发起任何第三方网络请求。
 - PDF 阅读器来自 `pdfjs-dist`；其 worker 由 `/paper-translator/pdf.worker.mjs` 提供。
@@ -229,7 +229,7 @@ dsh-paper-lens/
 **Bilingual LaTeX paper reader for DeepSeek Harness.** Read a paper with a Chinese translation on the left and the LaTeX source or PDF on the right, translate section by section, annotate reviewer reports against the exact paragraphs, and edit either side with a write-back to the `.tex` file.
 
 - Plugin name: `@local/paper-translator`
-- Version: `0.2.0`
+- Version: `0.3.0`
 - Verified on: DeepSeek Harness `0.2.2-rc.3` (desktop app and `dsh web`)
 - Runtime dependencies: none (prebuilt browser bundle; the host half uses Node built-ins only)
 
@@ -255,10 +255,10 @@ dsh-paper-lens/
 - **Side-by-side reading** — translation on the left, LaTeX source or PDF on the right; split, translation-only, source-only and PDF-only views from a single switcher.
 - **Section-aware translation** — the LaTeX project is parsed into blocks (sections, paragraphs, captions, math, lists) and translated block by block through the model route already configured in DSH.
 - **Per-block cache and usage ledger** — re-opening a paper restores finished translations; token and cost totals are shown per paper and globally.
-- **Write-back editing** — edit the Chinese translation or the English LaTeX and save; the source `.tex` is rewritten and the paragraph re-translated.
+- **Paragraph revisions** — preview English insertions and deletions, accept the displayed text, and undo the latest edit from the same paragraph.
 - **Optional local compile** — compile the PDF with `pdflatex`, `latexmk` or `xelatex` from the toolbar when a TeX distribution is installed.
 - **Reviewer reports** — keep up to eight reviewers, paste each report, translate and locate every remark against the paper, click to jump between remark and paragraph, and generate a cross-reviewer overview (overlaps, unique points, attitudes).
-- **Glossary and target language** — per-install glossary and target language (`zh-CN`, `zh-TW`, `en`).
+- **Project glossary** — select an English term, save its preferred translation, and inspect passages with a different rendering. Translation targets include `zh-CN`, `zh-TW` and `en`.
 - **Paper-like typography** — 74-character measure, generous line height, semantic theme colours, reduced-motion support.
 - **Works with wallpaper/glass themes** — when [`dsh-plugin-wallpaper-engine`](https://github.com/elysia395/dsh-wallpaper-engine) is active, the reader keeps its own paper surface so text stays legible over a wallpaper, and opts into the glass runtime through its public cross-plugin markers.
 - **Bilingual UI** — Chinese and English, following the DSH interface language.
@@ -318,30 +318,30 @@ dsh plugin --profile desktop add github:<owner>/<repo>
 
 ### Uninstall
 
-Plugins → the `@local/paper-translator` card → **Remove**, then restart DeepSeek Harness. Translations cached on the host stay under `$DSH_HOME/paper-translator` (see [Data and privacy](#data-and-privacy)).
+Plugins → the `@local/paper-translator` card → **Remove**, then restart DeepSeek Harness. Translations and review records stay beside the main manuscript (see [Data and privacy](#data-and-privacy)).
 
 ## First run
 
 1. Click **Open project…** and choose the directory that contains `main.tex` (a native folder chooser opens; on environments without one, use **Enter path manually**).
 2. If the project has several `.tex` files, pick the main file from the dropdown next to the project chip — the reader reloads the translation, source and PDF for that file.
-3. Click **Retranslate all** in the command bar. Blocks translate in batches; the progress ring shows `done/total`, and finished blocks are cached.
+3. Opening a project translates missing passages. Use **Retranslate all** to regenerate them all; the progress ring shows `done/total`, and finished blocks are cached.
 4. Use the view switcher to read **Split**, **Translation**, **LaTeX** or **PDF**. In split mode the right pane can toggle between LaTeX and PDF.
 5. If a TeX distribution is installed, **Compile PDF** builds the PDF and reloads the PDF pane.
 
 ## Using the reader
 
 - **Click** a block to highlight it and its source/PDF counterpart. **J / K** move the active block, **E** edits it.
-- **Edit** opens the paragraph editor: switch between Chinese and English, save and translate to rewrite the `.tex` source, or use the bundled *Best-Paper-Writing* polish pass to tighten the prose before saving.
+- **Edit** opens a Chinese or English draft. Choose **Preview English changes**, then **Accept and write**. Open the paragraph again to undo its latest edit.
 - The **status bar** shows translated segment count, cache hits and the running cost of the current paper; click it for the input/output/cache/call breakdown and the global total. The **Sync scroll** toggle lives on the right of the same bar.
-- **⋯ → Settings** opens the settings panel: target language, glossary (JSON), usage, and cache clearing.
-- **⋯ → Rebuttal** opens the reviewer panel (see below).
+- **⋯ → Settings** contains the project glossary, serif reading font, translation target and usage. Selecting a term in the reader also opens a shortcut to the glossary.
+- With a current PDF, a SyncTeX map and the SyncTeX executable, selecting a paragraph locates it in the PDF. Double-click a PDF location to select its source paragraph. Page estimates are used when a mapping is unavailable.
 
 ## Reviewer reports
 
-1. **⋯ → Rebuttal**. Each reviewer has a tab; add up to eight.
-2. Paste one reviewer's report per tab and click **Translate and locate**. Every remark is translated and matched to the paragraph it refers to.
-3. Click a match to jump to the paragraph; pinned markers appear next to the affected blocks and in the LaTeX gutter.
-4. **Overview** summarises the reviewers' attitudes, the points several reviewers share, and the points only one raised.
+1. Open **Review** and paste one report per reviewer. **Translate & map** retrieves candidate passages across the manuscript and verifies source excerpts.
+2. Select a comment to display its passage alongside it. To correct a match, select a paragraph and choose **Bind selected passage**. General comments and requests for new experiments can be tracked independently.
+3. **Revise passage** opens a linked editor. Accept the English change once and link it to another reviewer's comment when appropriate.
+4. Write a response and mark it as replied. **Overview** prioritizes outstanding shared concerns. **Export response draft** downloads a Markdown file grouped by reviewer, with accepted edits and outstanding tasks.
 
 ## Configuration
 
@@ -375,11 +375,11 @@ Changes to a row restart the plugin; open the panel again afterwards. Keep the `
 | `E` | Edit the active block |
 | `Cmd/Ctrl` + `+` / `-` / `0` | Zoom the PDF (when a PDF pane is visible) |
 | `Esc` | Close a menu, the settings panel or the reviewer panel |
-| `Cmd/Ctrl` + `Enter` | Save the paragraph editor |
+| `Cmd/Ctrl` + `Enter` | Preview or accept the current edit |
 
 ## Data and privacy
 
-- Translations, the usage ledger and the parsed-project cache live under `$DSH_HOME/paper-translator` (`~/.dsh/paper-translator` by default). **Settings → Clear this project / Clear all caches** clears them.
+- Reviewer reports, replies, preferred terms and accepted revisions are stored beside the main file in `<main>.paper-lens.review.json`. Existing browser review data and glossary entries migrate when the project is opened. Translation caches and the translated manuscript use `<main>.paper-lens.json` and `<main>.paper-lens.md`. The global ledger is in `$DSH_HOME/paper-translator/usage.json`.
 - Paper text leaves the machine only when you translate, polish or generate an overview, and only through the model route configured in DSH.
 - The browser half talks to the host over the authenticated `/api/paper-translator/*` fetch routes; no third-party network calls are made.
 - The PDF viewer ships with `pdfjs-dist`; its worker is served from `/paper-translator/pdf.worker.mjs`.

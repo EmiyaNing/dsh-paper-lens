@@ -1,0 +1,84 @@
+.pt-root {
+  container: paper-lens / inline-size;
+  --pt-rule: var(--dsw-alias-border-l1, #d7ddd6);
+  --pt-paper: var(--dsw-alias-bg-layer-1, #fffefa);
+  --pt-margin: var(--dsw-alias-bg-layer-2, #f4f5f1);
+  --pt-annot: color-mix(in srgb, var(--dsw-alias-state-warn-primary, #bc861e) 17%, var(--pt-paper));
+  --pt-reading: "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", Georgia, serif;
+}
+.pt-root .pt-cmdbar { flex-wrap:wrap; row-gap:6px; }
+.pt-workmodes, .pt-issue-nav, .pt-issue-actions, .pt-issue-flags, .pt-gloss-fields, .pt-term { display:flex; align-items:center; gap:7px; }
+.pt-workmodes { border:1px solid var(--pt-rule); padding:2px; gap:2px; border-radius:7px; }
+.pt-workmodes button { background:transparent; color:inherit; border:0; border-radius:5px; padding:4px 13px; font:inherit; cursor:pointer; }
+.pt-workmodes button[aria-pressed=true] { background:var(--pt-accent-fill); color:var(--pt-accent-on); }
+.pt-root .pt-pane-head { min-height:38px; justify-content:space-between; flex-wrap:wrap; }
+.pt-main .pt-pane { min-width:0; }
+.pt-root .pt-block { padding-block:5px; border-radius:3px; }
+.pt-block :is(h1,h2,h3,h4), .pt-serif .pt-block :is(p,.pt-caption) { font-family:var(--pt-reading); }
+.pt-block-tools { display:none; }
+.pt-block.active .pt-block-tools, .pt-block:focus-within .pt-block-tools { display:flex; opacity:1; }
+.pt-reviewing .pt-block.active { background:var(--pt-annot); border-inline-start-color:var(--dsw-alias-state-warn-primary,#a27525); }
+.pt-root .pt-dock-wide { width:38%; min-width:min(330px,45%); max-width:560px; background:var(--pt-margin); gap:11px; }
+.pt-reviewing .pt-main { flex:1 1 auto; }
+.pt-dock-wide .pt-rebuttal-body { padding:0 3px 16px 0; }
+.pt-dock-wide details > summary { font-size:13px; color:var(--dsw-alias-label-secondary,#4b5563); padding:7px 0; cursor:pointer; }
+.pt-dock-wide .pt-rebuttal-tabs { gap:3px; }
+.pt-dock-wide .pt-rebuttal-tabs button { background:transparent; border-color:transparent; color:inherit; }
+.pt-dock-wide .pt-rebuttal-tabs button.on { background:var(--pt-paper); border-color:var(--pt-rule); color:inherit; }
+.pt-export { align-self:flex-start; }
+.pt-issue { display:grid; gap:12px; padding-block:4px 16px; border-bottom:1px solid var(--pt-rule); }
+.pt-issue-nav select { flex:1; min-width:0; }
+.pt-issue .pt-review-quote { font:italic 17px/1.6 Georgia,"Songti SC",serif; margin:0; padding-inline-start:11px; border-inline-start:3px solid var(--dsw-alias-state-warn-primary,#a27525); overflow-wrap:anywhere; white-space:pre-wrap; }
+.pt-issue-flags { flex-wrap:wrap; font-size:12px; color:var(--dsw-alias-label-secondary,#4b5563); }
+.pt-issue-flags span + span::before { content:"·"; margin-right:7px; }
+.pt-issue label, .pt-gloss label { display:grid; gap:5px; }
+.pt-issue label select { width:100%; }
+.pt-root label.pt-inline { display:flex; gap:6px; align-items:center; }
+.pt-issue .pt-paper-evidence { padding:12px 14px; background:var(--pt-paper); border-inline-start:2px solid var(--pt-rule); }
+.pt-paper-evidence p { font:15px/1.65 Georgia,serif; margin:6px 0 0; overflow-wrap:anywhere; }
+.pt-paper-evidence mark { color:inherit; background:var(--pt-annot); }
+.pt-issue-actions { flex-wrap:wrap; }
+.pt-root .pt-issue textarea { font:inherit; min-height:76px; }
+.pt-root .pt-word-diff { font:16px/1.8 Georgia,"Songti SC",serif; white-space:pre-wrap; overflow-wrap:anywhere; }
+.pt-word-diff del { background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#b74d46) 17%,transparent); text-decoration:line-through; }
+.pt-word-diff ins { background:color-mix(in srgb,var(--dsw-alias-state-success-primary,#418452) 20%,transparent); text-decoration:underline; text-underline-offset:3px; }
+.pt-edit-card .pt-preview { padding:12px 16px; border:1px solid var(--pt-rule); border-radius:7px; background:var(--pt-paper); }
+.pt-preview h4,.pt-gloss h4 { margin:0 0 7px; font-size:13px; }
+.pt-root .pt-edit-card { max-height:90%; overflow:auto; }
+.pt-issue .pt-link,.pt-term .pt-link,.pt-edit-card .pt-link { background:none; border:0; padding:0; text-align:left; cursor:pointer; }
+.pt-gloss { display:grid; gap:8px; }
+.pt-gloss-fields { align-items:flex-end; flex-wrap:wrap; }
+.pt-gloss-fields label { flex:1 1 110px; min-width:0; }
+.pt-gloss-fields input { width:100%; min-height:30px; border:1px solid var(--pt-rule); border-radius:5px; color:inherit; background:var(--pt-paper); }
+.pt-gloss > button { justify-self:start; }
+.pt-term { justify-content:space-between; }
+.pt-match-link { display:block; width:100%; border:0; background:transparent; color:inherit; text-align:left; cursor:pointer; padding:6px 0; }
+.pt-pdf-spot { position:absolute; pointer-events:none; width:18px; height:8px; transform:translateY(-100%); border:2px solid #946700; background:#ffdd75a8; }
+.pt-preview-note { font-size:12px; color:var(--dsw-alias-label-secondary,#495448); }
+@container paper-lens (max-width: 780px) {
+  .pt-reviewing .pt-body { flex-direction:column; }
+  .pt-reviewing .pt-main { flex:1 1 48%; min-height:0; }
+  .pt-reviewing .pt-dock-wide { flex:1 1 52%; width:100%; min-width:0; max-width:none; min-height:0; border-left:0; border-top:1px solid var(--pt-rule); overflow:auto; }
+  .pt-reviewing .pt-dock-wide .pt-rebuttal-body { flex:0 0 auto; overflow:visible; }
+  .pt-cmdbar .pt-mainfile { max-width:125px; }
+}
+@container paper-lens (max-width: 530px) {
+  .pt-root .pt-main { flex-direction:column; }
+  .pt-main .pt-pane { min-height:0; flex:1; }
+  .pt-root .pt-proj { max-width:47%; }
+  .pt-root .pt-statusbar { flex-wrap:wrap; }
+  .pt-root .pt-dock:not(.pt-dock-wide) { width:100%; position:absolute; inset:0; z-index:20; }
+  .pt-root .pt-body { position:relative; }
+}
+.pt-edit-inline { width:100%; min-width:0; overflow:auto; background:var(--pt-paper); }
+.pt-edit-inline .pt-edit-card { width:auto; max-width:800px; max-height:none; margin:0 auto; padding:clamp(16px,3vw,36px); box-shadow:none; background:transparent; border:0; }
+.pt-fileline { font:12px/1.5 ui-monospace,monospace; color:var(--dsw-alias-label-secondary,#59615c); }
+.pt-issue { grid-template-columns:minmax(0,1fr); }
+.pt-issue > *, .pt-issue label { min-width:0; }
+.pt-issue-nav { min-height:24px; }
+.pt-issue-nav strong { font-size:12px; color:var(--dsw-alias-label-secondary,#59615c); }
+.pt-issue .pt-review-quote { font-size:18px; }
+.pt-edit-inline .pt-edit-card h3 { font:600 clamp(21px,2.5vw,29px)/1.3 var(--pt-reading); margin-bottom:5px; }
+.pt-edit-inline .pt-edit-card textarea { min-height:104px; height:clamp(104px,18vh,190px); resize:vertical; }
+.pt-word-diff del + ins, .pt-word-diff ins + del { margin-inline-start:.24em; }
+.pt-status-note { background:var(--pt-margin); color:var(--dsw-alias-label-secondary,#59615c); }

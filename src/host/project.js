@@ -96,7 +96,8 @@ async function expandFile(root, file, depth, seen, state) {
   const lines = text.replace(/\r\n?/g, '\n').split('\n')
   state.out.push(`% ==== paper-translator: begin ${relPath} ====`)
   const startLine = state.out.length + 1
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
+    state.locations[state.out.length + 1] = { file: relPath, fileLine: index + 1 }
     const match = INPUT_RE.exec(line)
     if (match && !line.trimStart().startsWith('%')) {
       const target = await resolveTexFile(root, file, match[1])
@@ -153,27 +154,13 @@ export async function loadProject(rootInput, mainFileInput) {
   if (!isInside(root, main)) throw new Error('主文件不在项目目录内')
   if (!main.endsWith('.tex')) throw new Error('主文件必须是 .tex')
 
-  const state = { out: [], ranges: [], warnings: [], budget: 0 }
+  const state = { out: [], ranges: [], locations: [], warnings: [], budget: 0 }
   await expandFile(root, main, 0, new Set(), state)
   const virtual = state.out.join('\n')
   const parsed = parseLatex(virtual)
 
   for (const block of parsed.blocks) {
-    // A nested file's range is smaller than its parent's; pick the most
-    // specific range so the block maps to the file that actually wrote it.
-    let best = null
-    for (const range of state.ranges) {
-      if (block.line >= range.startLine && block.line <= range.endLine) {
-        if (!best || range.endLine - range.startLine < best.endLine - best.startLine) best = range
-      }
-    }
-    if (best) {
-      block.file = best.path
-      block.fileLine = Math.max(1, block.line - best.startLine + 1)
-    } else {
-      block.file = toPosix(relative(root, main))
-      block.fileLine = block.line
-    }
+    Object.assign(block, state.locations[block.line] ?? { file: toPosix(relative(root, main)), fileLine: block.line })
   }
 
   parsed.warnings = [...state.warnings, ...parsed.warnings]
@@ -187,7 +174,7 @@ export async function loadProject(rootInput, mainFileInput) {
   } catch {
     pdf = null
   }
-  const synctexPath = pdfPath + '.synctex.gz'
+  const synctexPath = main.replace(/\.tex$/i, '.synctex.gz')
   let synctex = false
   try {
     synctex = (await stat(synctexPath)).isFile()

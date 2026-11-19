@@ -330,6 +330,7 @@ class LatexParser {
       placeholders: block.placeholders ?? [],
       ...(block.level ? { level: block.level } : {}),
       ...(block.label ? { label: block.label } : {}),
+      ...(block.refLabels?.length ? { refLabels: block.refLabels } : {}),
       ...(block.latex ? { latex: block.latex, env: block.env } : {}),
     }
     this.blocks.push(entry)
@@ -1079,6 +1080,7 @@ class LatexParser {
           translatable: true,
           placeholders: rendered.placeholders,
           label,
+          refLabels: [...slice.matchAll(/\\label\s*\{([^{}]+)\}/g)].map(item => item[1]),
         })
       }
       re.lastIndex = group.end - start

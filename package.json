@@ -1,9 +1,9 @@
 {
   "name": "@local/paper-translator",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "Paper Lens — bilingual LaTeX paper reader for the DeepSeek Harness Web GUI",
+  "description": "Paper Lens \u2014 bilingual LaTeX paper reader for the DeepSeek Harness Web GUI",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -16,6 +16,7 @@
     "cordis.patch.yml",
     "src/**/*.js",
     "src/**/*.jsx",
+    "src/**/*.css",
     "locale/*.json",
     "icon.svg",
     "assets/pdf.worker.mjs",
@@ -27,7 +28,7 @@
   ],
   "scripts": {
     "build": "node scripts/build-client.mjs",
-    "test": "node test/parser.test.mjs",
+    "test": "node test/parser.test.mjs && node --test test/revision.test.mjs",
     "test:ui": "node test/mount-smoke.mjs"
   },
   "devDependencies": {

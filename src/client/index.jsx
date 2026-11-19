@@ -1,4 +1,8 @@
 import * as pdfjsLib from 'pdfjs-dist'
+import { createRevisionUI, label } from './revision-ui.jsx'
+import { reviewSession } from './review-session.js'
+import { anchorFor, resolveMatch, reviewIssues, issuesFromAnalysis, responseMarkdown } from '../shared/reviews.js'
+import revisionStyles from './revision.css'
 import katex from 'katex'
 import { prepareMath } from '../shared/math.js'
 
@@ -124,6 +128,20 @@ const CSS = `
   color: var(--dsw-alias-label-secondary, #4b5563);
   border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
 }
+/* Citations and cross-references sit inline with CJK text. A fixed-height
+   flex chip let a long key wrap inside an 18px box and overlap the next line;
+   this marker keeps the line box intact, never wraps, and shortens long keys
+   with an ellipsis (full key stays in the tooltip). */
+.pt-cite {
+  display: inline-block; max-width: 16em; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; vertical-align: baseline; line-height: 1.5;
+  margin: 0 3px; padding: 0 4px; border-radius: 4px;
+  font-size: .82em; font-variant-numeric: tabular-nums;
+  background: var(--dsw-alias-markdown-inline-code, #eef2ff);
+  color: var(--dsw-alias-label-secondary, #4b5563);
+  border: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
+}
+.pt-cite-ref { padding: 0 2px; background: transparent; border-color: transparent; color: var(--dsw-alias-link, #2563eb); }
 .pt-link { color: var(--dsw-alias-link, #2563eb); text-decoration: underline; }
 .pt-block-meta { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; color: var(--dsw-alias-label-tertiary, #6b7280); }
 .pt-mini { height: 22px; padding: 0 7px; font-size: 11px; border-radius: 4px; }
@@ -403,7 +421,11 @@ const CSS = `
   padding: 8px 12px; padding-top: calc(8px + var(--dsh-frame-top-clearance, 0px));
   border-bottom: 1px solid var(--dsw-alias-border-l1, #e5e7eb);
   background: var(--dsw-alias-bg-layer-1, #fff);
-  position: relative; z-index: 20;
+  /* The bar's own top padding already clears the window strip, so its content
+     can use the full width when the sidebar is hidden. The frame's leading seat
+     paints at z-index 15; staying below it keeps the sidebar reopen control
+     clickable without indenting the bar. */
+  position: relative; z-index: 1;
 }
 .pt-proj {
   display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px;
@@ -651,7 +673,7 @@ const LOCALE = (() => {
         usageCacheWrite: '缓存写入', usageCalls: '模型调用', usageCost: '估算费用',
         globalUsageNote: '跨论文累计，保存在 DSH_HOME/paper-translator/usage.json；清空单篇缓存不会清零总账。',
         usageNote: '按 DeepSeek 官方 deepseek-flash 峰谷价估算（单位 USD），人民币按配置汇率换算；未排除中国法定节假日。',
-        zhEditHint: '保留 ⟦M1⟧ 这类占位符（公式/引用）；保存后自动译成英文并写回对应 .tex。段落内的加粗、斜体等格式会被简化。',
+        zhEditHint: '保留 ⟦M1⟧ 这类占位符（公式/引用）；预览英文差异后可采纳并写回。段落内的加粗、斜体等格式会被简化。',
         enEditHint: '这里编辑的是该段落的原始 LaTeX 片段；保存后写回 .tex，并自动翻译成中文。',
         glossaryHint: 'JSON 对象，例如 {"world model": "世界模型"}',
         target: '目标语言', close: '关闭', save: '保存', settingsSaved: '设置已保存',
@@ -694,7 +716,7 @@ const LOCALE = (() => {
         usageCacheWrite: 'Cache write', usageCalls: 'Model calls', usageCost: 'Estimated cost',
         globalUsageNote: 'Cumulative across papers, stored in DSH_HOME/paper-translator/usage.json. Clearing one paper\'s cache does not reset the global ledger.',
         usageNote: 'Estimated from DeepSeek official deepseek-flash peak/off-peak prices in USD; CNY uses the configured exchange rate. Chinese public holidays are not excluded.',
-        zhEditHint: 'Keep placeholders such as ⟦M1⟧ (math/citations). Saving translates to English and writes it back to the .tex file. Bold/italic formatting inside the paragraph is simplified.',
+        zhEditHint: 'Keep placeholders such as ⟦M1⟧ (math/citations). Preview the English changes before accepting them. Bold/italic formatting inside the paragraph is simplified.',
         enEditHint: 'Edit the raw LaTeX fragment for this block. Saving writes it back and translates it to Chinese.',
         glossaryHint: 'JSON object, e.g. {"world model": "世界模型"}',
         target: 'Target language', close: 'Close', save: 'Save', settingsSaved: 'Settings saved',
@@ -819,10 +841,13 @@ function RichText({ text, placeholders }) {
     if (!placeholder) return part
     if (placeholder.type === 'M') return <MathSpan key={index} latex={placeholder.latex} display={placeholder.display} />
     if (placeholder.type === 'C') {
-      return <span key={index} className="pt-chip" title={placeholder.key}>[{placeholder.key ?? 'cite'}]</span>
+      const keys = String(placeholder.key ?? '').split(',').map((key) => key.trim()).filter(Boolean)
+      const label = keys.length > 1 ? `${keys[0]} +${keys.length - 1}` : (keys[0] || 'cite')
+      return <span key={index} className="pt-cite" title={keys.join(', ') || 'cite'}>[{label}]</span>
     }
     if (placeholder.type === 'R') {
-      return <span key={index} className="pt-chip" title={placeholder.key}>↗ {placeholder.key ?? 'ref'}</span>
+      const key = String(placeholder.key ?? '').trim()
+      return <span key={index} className="pt-cite pt-cite-ref" title={key || 'ref'}>↗ {key || 'ref'}</span>
     }
     if (placeholder.type === 'U') {
       return <a key={index} className="pt-link" href={placeholder.url} target="_blank" rel="noreferrer">{placeholder.url}</a>
@@ -866,6 +891,8 @@ function SidebarIcon() {
   )
 }
 
+
+    const { Diff, IssueDetail, Glossary } = createRevisionUI(React)
 
     function ProgressRing({ done, total }) {
       const pct = total > 0 ? Math.max(0, Math.min(1, done / total)) : 0
@@ -927,10 +954,9 @@ function SidebarIcon() {
             </select>
           ) : null}
           {project ? (
-            <div className="pt-viewseg" role="group" aria-label={LOCALE.mode}>
-              {[['split', LOCALE.split], ['translation', LOCALE.translation], ['source', LOCALE.source], ['pdf', LOCALE.pdf]].map(([id, label]) => (
-                <button key={id} className={view === id ? 'on' : ''} aria-pressed={view === id} onClick={() => onView(id)}>{label}</button>
-              ))}
+            <div className="pt-workmodes" role="group" aria-label={label('工作模式','Workspace')}>
+              <button aria-pressed={!props.reviewing} onClick={props.onRead}>{label('阅读','Read')}</button>
+              <button aria-pressed={props.reviewing} onClick={onRebuttal}>{label('返修','Review')}</button>
             </div>
           ) : null}
           <div className="pt-spacer" />
@@ -1091,7 +1117,7 @@ function SidebarIcon() {
                         key={`${pin.reviewerId}-${pin.number}`}
                         className="pt-rebuttal-pin"
                         title={`${pin.reviewerName} · ${LOCALE.rebuttal}: ${pin.number}`}
-                        onClick={(event) => { event.stopPropagation(); onRebuttal(block.id, pin.reviewerId) }}
+                        onClick={(event) => { event.stopPropagation(); onRebuttal(block.id, pin.reviewerId,pin.match.id) }}
                       >
                         {reviewerBadge(pin.reviewerName)}·{pin.number}
                       </button>
@@ -1189,6 +1215,14 @@ function SidebarIcon() {
       const [error, setError] = useState('')
       const [height, setHeight] = useState(620)
       const [pageWidth, setPageWidth] = useState(0)
+      const [baseSize,setBaseSize] = useState(null)
+      const spotRef=useRef(null)
+      useEffect(()=>{
+        if(spotRef.current) {
+          props.onJump()
+          spotRef.current.scrollIntoView({block:'nearest',inline:'nearest'})
+        }
+      },[props.hit,baseSize])
 
       useEffect(() => {
         const node = wrapperRef.current
@@ -1224,6 +1258,7 @@ function SidebarIcon() {
             if (ratio !== 1) renderParams.transform = [ratio, 0, 0, ratio, 0, 0]
             task = page.render(renderParams)
             await task.promise
+            setBaseSize({width:base.width,height:base.height})
             setHeight(Math.round(viewport.height))
             setPageWidth(Math.round(viewport.width))
           } catch (renderError) {
@@ -1249,7 +1284,12 @@ function SidebarIcon() {
           data-page={pageNumber}
         >
           {error ? <div className="pt-banner err">{LOCALE.pdfFailed}: {error}</div> : null}
-          <canvas ref={canvasRef} />
+          <canvas ref={canvasRef} onDoubleClick={event=>{
+            if(!baseSize) return
+            const box=event.currentTarget.getBoundingClientRect()
+            props.onPoint(pageNumber,(event.clientX-box.left)*baseSize.width/box.width,(event.clientY-box.top)*baseSize.height/box.height)
+          }}/>
+          {props.hit && baseSize && <span className="pt-pdf-spot" ref={spotRef} aria-label="SyncTeX" style={{left:100*props.hit.x/baseSize.width+'%',top:100*props.hit.y/baseSize.height+'%'}}/>}
           <span className="pt-pdf-no">{pageNumber}</span>
         </div>
       )
@@ -1261,6 +1301,7 @@ function SidebarIcon() {
       const frameRef = useRef(0)
       const lastRef = useRef(0)
       const [containerWidth, setContainerWidth] = useState(0)
+      const programmaticScroll = useRef(0)
 
       useEffect(() => {
         const node = scrollRef.current
@@ -1287,7 +1328,7 @@ function SidebarIcon() {
       }, [pdfDoc, pdfPages])
 
       const handleScroll = () => {
-        if (frameRef.current) return
+        if (frameRef.current || Date.now() < programmaticScroll.current) return
         frameRef.current = requestAnimationFrame(() => {
           frameRef.current = 0
           const container = scrollRef.current
@@ -1349,8 +1390,9 @@ function SidebarIcon() {
         if (!node) return
         const box = scrollRef.current.getBoundingClientRect()
         const rect = node.getBoundingClientRect()
+        programmaticScroll.current = Date.now() + 350
         if (rect.top < box.top + 30 || rect.bottom > box.bottom - 30) node.scrollIntoView({ block: 'start' })
-      }, [activePage])
+      }, [activePage, props.hit])
 
       if (!pdfDoc) {
         return <div className="pt-empty"><p>{LOCALE.noPdf}</p></div>
@@ -1362,13 +1404,13 @@ function SidebarIcon() {
             <button className="pct" title={LOCALE.fitWidth} aria-label={LOCALE.fitWidth} onClick={() => onZoom(1)}>{Math.round(zoom * 100)}%</button>
             <button title={LOCALE.zoomIn} aria-label={LOCALE.zoomIn} onClick={() => onZoom(zoom * 1.1)}>+</button>
           </div>
-          <div className="pt-scroll pt-pdf" ref={scrollRef} onScroll={handleScroll}>
+          <div className="pt-scroll pt-pdf" ref={scrollRef} onScroll={handleScroll} onPointerDown={()=>{programmaticScroll.current=0}} onWheelCapture={()=>{programmaticScroll.current=0}}>
             {Array.from({ length: pdfPages }, (_, index) => (
               <PdfPage
                 key={index + 1}
                 pdfDoc={pdfDoc}
                 pageNumber={index + 1}
-                active={activePage === index + 1}
+                active={activePage === index + 1} hit={props.hit?.page===index+1 ? props.hit : null} onPoint={props.onPoint} onJump={()=>{programmaticScroll.current=Date.now()+350}}
                 containerRef={scrollRef}
                 containerWidth={containerWidth}
                 zoom={zoom}
@@ -1390,8 +1432,8 @@ function SidebarIcon() {
               <option value="zh-TW">繁體中文</option>
               <option value="en">English</option>
             </select>
-            <label>{LOCALE.glossary}</label>
-            <textarea value={glossaryText} onChange={(event) => setGlossaryText(event.target.value)} placeholder={LOCALE.glossaryHint} />
+            <Glossary key={props.selectedTerm} selected={props.selectedTerm} glossary={parseGlossary(glossaryText)} setGlossary={next=>setGlossaryText(JSON.stringify(next))} blocks={props.blocks} translations={props.translations} onLocate={props.onLocate}/>
+            <label className="pt-inline"><input type="checkbox" checked={props.serif} onChange={e=>props.onSerif(e.target.checked)}/>{label('宋体阅读','Serif reading font')}</label>
             <div className="pt-usage-card">
               <div className="pt-usage-title">{LOCALE.usage}</div>
               <div>{LOCALE.usageInput}: {(usage.input ?? 0).toLocaleString()} · {LOCALE.usageOutput}: {(usage.output ?? 0).toLocaleString()}</div>
@@ -1424,7 +1466,8 @@ function SidebarIcon() {
       } = props
       const activeReviewer = reviewers.find((reviewer) => reviewer.id === activeId) ?? reviewers[0] ?? null
       const result = activeReviewer?.result ?? null
-      const blockById = useMemo(() => new Map((blocks ?? []).map((block) => [block.id, block])), [blocks])
+      const issues = reviewIssues(activeReviewer)
+      const choose = issue => { if (issue) props.onIssue(issue) }
       const reviewerById = useMemo(() => new Map((reviewers ?? []).map((reviewer) => [reviewer.id, reviewer])), [reviewers])
       const numberById = useMemo(
         () => new Map((result?.matches ?? []).map((match, index) => [match.id, index + 1])),
@@ -1464,13 +1507,13 @@ function SidebarIcon() {
                     const match = segment.matchId ? matchById.get(segment.matchId) : null
                     if (!match) return <span key={index}>{segment.text}</span>
                     const number = numberById.get(match.id)
-                    const block = blockById.get(match.blockId)
+                    const block = resolveMatch(issues.find(issue=>issue.id===match.id) || match,blocks,props.history)
                     return (
                       <mark
                         key={index}
                         className="pt-rebuttal-mark"
                         title={`${LOCALE.rebuttalLocate}: ${block?.section || block?.kind || match.blockId}`}
-                        onClick={() => onLocate(match)}
+                        onClick={() => onLocate(issues.find(issue=>issue.id===match.id) || match)}
                       >
                         {segment.text}
                         <sup>{number}</sup>
@@ -1486,13 +1529,13 @@ function SidebarIcon() {
             ) : (
               <div className="pt-rebuttal-matches">
                 {result.matches.map((match, index) => {
-                  const block = blockById.get(match.blockId)
+                  const block = resolveMatch(issues.find(issue=>issue.id===match.id) || match,blocks,props.history)
                   return (
                     <button
                       type="button"
                       className="pt-rebuttal-match"
                       key={match.id}
-                      onClick={() => onLocate(match)}
+                      onClick={() => onLocate(issues.find(issue=>issue.id===match.id) || match)}
                     >
                       <span className="pt-rebuttal-num">{index + 1}</span>
                       <span className="pt-rebuttal-match-body">
@@ -1512,6 +1555,16 @@ function SidebarIcon() {
         )
       }
 
+      function pendingCount(group) {
+        return group.reviewerIds.filter(id => {
+          const quote=group.quotes?.find(item=>item.reviewerId===id)?.text
+          return !quote || !reviewIssues(reviewerById.get(id)).some(issue=>
+            issue.replied && (issue.quote.includes(quote) || quote.includes(issue.quote)))
+        }).length
+      }
+      const sharedGroups = [...(overview?.overlaps || [])].sort((a,b)=>
+        Number(pendingCount(b)>0)-Number(pendingCount(a)>0) ||
+        Number(b.severity==='major')-Number(a.severity==='major'))
       const renderOverview = () => (
         <div className="pt-overview">
           <div className="pt-rebuttal-controls">
@@ -1533,36 +1586,12 @@ function SidebarIcon() {
               <h4>{LOCALE.overviewSummary}</h4>
               <p className="pt-overview-summary">{overview.summary}</p>
 
-              <h4>{LOCALE.overviewAttitudes}</h4>
-              <div className="pt-attitudes">
-                {(overview.reviewers ?? []).map((item) => {
-                  const reviewer = reviewerById.get(item.id)
-                  return (
-                    <div className={`pt-attitude ${item.attitude}`} key={item.id}>
-                      <div className="pt-attitude-head">
-                        <button className="pt-overview-reviewer" onClick={() => onSelectView(item.id)}>
-                          {reviewer?.name ?? item.id}
-                        </button>
-                        <span className={`pt-attitude-badge ${item.attitude}`}>{attitudeLabel[item.attitude] ?? item.attitude}</span>
-                        <span className="pt-attitude-score">{item.score > 0 ? `+${item.score}` : item.score}</span>
-                      </div>
-                      <p>{item.summary}</p>
-                      {item.evidence?.length ? (
-                        <ul>
-                          {item.evidence.map((quote, index) => <li key={index}>{quote}</li>)}
-                        </ul>
-                      ) : null}
-                    </div>
-                  )
-                })}
-              </div>
-
               <h4>{LOCALE.overviewOverlaps}</h4>
               {(overview.overlaps ?? []).length === 0 ? (
                 <div className="pt-muted">{LOCALE.overviewNoneOverlap}</div>
               ) : (
                 <div className="pt-overview-groups">
-                  {overview.overlaps.map((group) => (
+                  {sharedGroups.map((group) => (
                     <div className="pt-overview-group" key={group.id}>
                       <div className="pt-overview-group-head">
                         <strong>{group.title}</strong>
@@ -1571,8 +1600,9 @@ function SidebarIcon() {
                         </span>
                       </div>
                       <div className="pt-overview-reviewers">
+                        <span className="pt-preview-note">{label('待回复','Awaiting reply')} {pendingCount(group)} / {group.reviewerIds.length}</span>
                         {group.reviewerIds.map((id) => (
-                          <button className="pt-overview-reviewer" key={id} onClick={() => onSelectView(id)}>
+                          <button className="pt-overview-reviewer" key={id} onClick={() => props.onGroup(id,group.quotes?.find(q=>q.reviewerId===id)?.text)}>
                             {reviewerById.get(id)?.name ?? id}
                           </button>
                         ))}
@@ -1604,7 +1634,7 @@ function SidebarIcon() {
                         </span>
                       </div>
                       <div className="pt-overview-reviewers">
-                        <button className="pt-overview-reviewer" onClick={() => onSelectView(group.reviewerId)}>
+                        <button className="pt-overview-reviewer" onClick={() => props.onGroup(group.reviewerId,group.quote)}>
                           {reviewerById.get(group.reviewerId)?.name ?? group.reviewerId}
                         </button>
                       </div>
@@ -1614,6 +1644,30 @@ function SidebarIcon() {
                   ))}
                 </div>
               )}
+              <h4>{LOCALE.overviewAttitudes}</h4>
+              <div className="pt-attitudes">
+                {(overview.reviewers ?? []).map((item) => {
+                  const reviewer = reviewerById.get(item.id)
+                  return (
+                    <div className={`pt-attitude ${item.attitude}`} key={item.id}>
+                      <div className="pt-attitude-head">
+                        <button className="pt-overview-reviewer" onClick={() => onSelectView(item.id)}>
+                          {reviewer?.name ?? item.id}
+                        </button>
+                        <span className={`pt-attitude-badge ${item.attitude}`}>{attitudeLabel[item.attitude] ?? item.attitude}</span>
+                        <span className="pt-attitude-score">{item.score > 0 ? `+${item.score}` : item.score}</span>
+                      </div>
+                      <p>{item.summary}</p>
+                      {item.evidence?.length ? (
+                        <ul>
+                          {item.evidence.map((quote, index) => <li key={index}>{quote}</li>)}
+                        </ul>
+                      ) : null}
+                    </div>
+                  )
+                })}
+              </div>
+
             </>
           ) : (
             <div className="pt-muted">{LOCALE.overviewEmpty}</div>
@@ -1628,9 +1682,11 @@ function SidebarIcon() {
           onKeyDown={(event) => { if (event.key === 'Escape' && !busy && !overviewBusy) onClose() }}
         >
             <div className="pt-rebuttal-head">
-              <h3>{LOCALE.rebuttalTitle}</h3>
+              <h3>{label('返修意见','Reviewer comments')}</h3>
+              <button className="pt-btn pt-mini" disabled={!reviewers.some(r=>r.text?.trim())} onClick={props.onExport}>{label('导出逐点回复','Export response draft')}</button>
               <button className="pt-btn pt-mini" disabled={busy || overviewBusy} onClick={onClose}>×</button>
             </div>
+            {props.recovery && <button className="pt-btn" onClick={props.onRecovery}>{label('下载本地草稿','Download local draft')}</button>}
             <div className="pt-rebuttal-tabs">
               {reviewers.map((reviewer) => (
                 <button
@@ -1661,6 +1717,10 @@ function SidebarIcon() {
             <div className="pt-rebuttal-body">
             {view === 'overview' ? renderOverview() : activeReviewer ? (
               <>
+                {issues.length>0 && <IssueDetail editing={props.editing} reviewerId={activeReviewer.id} issues={issues} selected={props.selectedIssue} onSelect={choose}
+                  onChange={props.onIssueChange} blocks={blocks} history={props.history} activeBlock={props.activeBlock}
+                  onEdit={(block,issue)=>props.onEdit(block,'zh',{reviewerId:activeReviewer.id,issueId:issue.id,quote:issue.quote})}/>}
+                <details key={activeReviewer.id + Boolean(result)} open={result ? undefined : true}><summary>{label('审稿原文与翻译','Reviewer report and translation')}</summary>
                 <label className="pt-rebuttal-name">
                   {LOCALE.reviewerName}
                   <input
@@ -1673,7 +1733,6 @@ function SidebarIcon() {
                   className="pt-rebuttal-input"
                   value={activeReviewer.text}
                   disabled={busy || overviewBusy}
-                  autoFocus
                   placeholder={LOCALE.rebuttalPlaceholder}
                   onChange={(event) => onUpdate(activeReviewer.id, { text: event.target.value })}
                   onInput={(event) => onUpdate(activeReviewer.id, { text: event.currentTarget.value })}
@@ -1702,6 +1761,7 @@ function SidebarIcon() {
                 </div>
                 {error ? <div className="pt-banner err">{LOCALE.rebuttalFailed}: {error}</div> : null}
                 {renderResult()}
+                </details>
               </>
             ) : null}
             </div>
@@ -1744,12 +1804,22 @@ function SidebarIcon() {
       const [activeReviewerId, setActiveReviewerId] = useState('r1')
       const [rebuttalView, setRebuttalView] = useState('r1')
       const [rebuttalOverview, setRebuttalOverview] = useState(null)
+      const [history, setHistory] = useState([])
+      const [selectedIssue, setSelectedIssue] = useState(null)
+      const [reviewPane, setReviewPane] = useState('translation')
+      const [selectedTerm, setSelectedTerm] = useState('')
+      const [glossaryTerm,setGlossaryTerm] = useState('')
+      const [recovery,setRecovery] = useState(null)
+      const [serif, setSerif] = useState(()=>localStorage.getItem('paperTranslator.serif') === '1')
+      const sessionRef = useRef(null)
+      const glossaryRef = useRef({})
+      const [syncHit,setSyncHit] = useState(null)
       const [rebuttalBusy, setRebuttalBusy] = useState(false)
       const [overviewBusy, setOverviewBusy] = useState(false)
       const [rebuttalError, setRebuttalError] = useState('')
       const [overviewError, setOverviewError] = useState('')
       const [target, setTarget] = useState(() => localStorage.getItem('paperTranslator.target') || 'zh-CN')
-      const [glossaryText, setGlossaryText] = useState(() => localStorage.getItem('paperTranslator.glossary') || '{}')
+      const [glossaryText, setGlossaryText] = useState('{}')
       const [usage, setUsage] = useState(EMPTY_USAGE)
       const [globalUsage, setGlobalUsage] = useState(EMPTY_USAGE)
       const [pdfDoc, setPdfDoc] = useState(null)
@@ -1769,6 +1839,8 @@ function SidebarIcon() {
       const lockRef = useRef(0)
       const sigRef = useRef('')
       const refreshRef = useRef(false)
+      const statRef = useRef(false)
+      const pendingRefreshRef = useRef(false)
       const pdfDocRef = useRef(null)
       const blocksRef = useRef([])
       const activeIdRef = useRef(null)
@@ -1780,19 +1852,9 @@ function SidebarIcon() {
       useEffect(() => { projectRef.current = project }, [project])
       useEffect(() => {
         if (!project?.projectId || rebuttalLoadedRef.current !== project.projectId) return undefined
-        const timer = setTimeout(() => {
-          try {
-            localStorage.setItem(`paperTranslator.rebuttal.${project.projectId}`, JSON.stringify({
-              version: 2,
-              reviewers,
-              overview: rebuttalOverview,
-            }))
-          } catch {
-            // storage is optional
-          }
-        }, 250)
-        return () => clearTimeout(timer)
-      }, [project?.projectId, reviewers, rebuttalOverview])
+        sessionRef.current?.queue({reviewers, overview:rebuttalOverview, glossary:parseGlossary(glossaryText)})
+      }, [project?.projectId, reviewers, rebuttalOverview, glossaryText])
+      useEffect(()=>()=>{ void sessionRef.current?.flush().catch(()=>{}) },[])
       useEffect(() => { blocksRef.current = blocks }, [blocks])
       useEffect(() => { activeIdRef.current = activeId }, [activeId])
       useEffect(() => { editingRef.current = Boolean(editing) }, [editing])
@@ -1809,7 +1871,7 @@ function SidebarIcon() {
         localStorage.setItem('paperTranslator.target', target)
       }, [target])
       useEffect(() => {
-        localStorage.setItem('paperTranslator.glossary', glossaryText)
+        glossaryRef.current = parseGlossary(glossaryText)
       }, [glossaryText])
 
       useEffect(() => {
@@ -1898,15 +1960,24 @@ function SidebarIcon() {
 
       const runBatch = useCallback(async (batch, projectId, bypassCache) => {
         const controller = abortRef.current
+        // A stalled model call must not pin the refresh guard for the rest of
+        // the session: fail the batch after three minutes and let the queue
+        // move on.
+        const timeout = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+          ? AbortSignal.timeout(180000)
+          : null
+        const signal = timeout && controller?.signal && typeof AbortSignal.any === 'function'
+          ? AbortSignal.any([controller.signal, timeout])
+          : (controller?.signal ?? timeout ?? undefined)
         try {
           const data = await api('/translate', {
             projectId,
             target,
-            glossary,
+            glossary:glossaryRef.current,
             bypassCache,
             blocks: batch.map((block) => block.id),
             prevSource: '',
-          }, controller?.signal)
+          }, signal)
           setTranslations((previous) => {
             const next = { ...previous }
             for (const result of data.results ?? []) {
@@ -1980,7 +2051,29 @@ function SidebarIcon() {
         setError('')
         setStatus(LOCALE.parsing)
         try {
-          const data = await api('/project/open', { root, mainFile: main }, abortRef.current.signal)
+          await sessionRef.current?.flush()
+          const legacyTerms = parseGlossary(localStorage.getItem('paperTranslator.glossary') || '{}')
+          const data = await api('/project/open', { root, mainFile: main, target, glossary:legacyTerms }, abortRef.current.signal)
+          setRecovery(null)
+          let workspace = data.review?.workspace
+          try {
+            const backup=JSON.parse(localStorage.getItem('paperTranslator.reviewDraft.' + data.projectId) || 'null')
+            if (backup?.workspace && backup.version === (data.review?.version ?? 0)) workspace = backup.workspace
+            else if (backup?.workspace) {setRecovery(backup.workspace); setError(label('发现其他窗口的改动。本地未保存的草稿可在返修面板下载。','Another window changed this project. Download your local draft from Review.'))}
+          } catch {}
+          sessionRef.current = reviewSession(data.projectId,data.review,api,(err,draft)=>{
+            if(projectRef.current?.projectId===data.projectId) {
+              setError(err.message)
+              if(err.code==='review/conflict') setRecovery(draft)
+            }
+          })
+          glossaryRef.current = workspace?.glossary ?? legacyTerms
+          setGlossaryText(JSON.stringify(glossaryRef.current))
+          setHistory(data.review?.history || [])
+          setSelectedIssue(null)
+          setSelectedTerm('')
+          setGlossaryTerm('')
+          setEditing(null)
           localStorage.setItem('paperTranslator.root', data.root)
           localStorage.setItem('paperTranslator.main', data.mainFile)
           localStorage.setItem('paperTranslator.projectId', data.projectId)
@@ -1998,6 +2091,7 @@ function SidebarIcon() {
           setMainInput(data.mainFile)
           setTexFiles(data.texFiles ?? [])
           MATH_MACROS = data.mathMacros ?? {}
+          projectRef.current=data
           setProject(data)
           setBlocks(data.blocks ?? [])
           const initialTranslations = {}
@@ -2017,7 +2111,7 @@ function SidebarIcon() {
           let nextReviewers = [newReviewer('r1', 1, 'zh-CN')]
           let nextOverview = null
           try {
-            const saved = JSON.parse(localStorage.getItem(rebuttalKey) || 'null')
+            const saved = workspace ?? JSON.parse(localStorage.getItem(rebuttalKey) || 'null')
             const segmentedResult = (value) => Boolean(
               value
               && Array.isArray(value.segments)
@@ -2043,6 +2137,7 @@ function SidebarIcon() {
                   text: typeof raw.text === 'string' ? raw.text : '',
                   target: raw.target === 'en' ? 'en' : 'zh-CN',
                   result: segmentedResult(raw.result) ? raw.result : null,
+                  issues: Array.isArray(raw.issues) ? raw.issues : undefined,
                 }
               })
             }
@@ -2132,22 +2227,31 @@ function SidebarIcon() {
       }, [])
 
       const refreshProject = useCallback(async () => {
-        if (editingRef.current) return
+        if (editingRef.current) {
+          // The editor owns the document while it is open. Remember that the
+          // file moved on and replay the refresh when it closes instead of
+          // dropping the change.
+          pendingRefreshRef.current = true
+          return false
+        }
         const current = projectRef.current
-        if (!current || refreshRef.current) return
+        if (!current || refreshRef.current) return false
         refreshRef.current = true
         try {
-          const data = await api('/project/refresh', { projectId: current.projectId })
+          const data = await api('/project/refresh', { projectId: current.projectId, target, glossary:glossaryRef.current })
           MATH_MACROS = data.mathMacros ?? {}
-          setProject(data)
-          setBlocks(data.blocks ?? [])
-          const merged = { ...(translationsRef.current ?? {}) }
-          for (const id of data.removed ?? []) delete merged[id]
+          if (projectRef.current?.projectId!==current.projectId) return false
+          if (data.history) setHistory(data.history)
+          const nextBlocks = data.blocks ?? []
+          const nextTranslations = { ...(translationsRef.current ?? {}) }
+          for (const id of data.removed ?? []) delete nextTranslations[id]
           for (const [id, text] of Object.entries(data.translations ?? {})) {
-            if (!merged[id]?.text && typeof text === 'string' && text) merged[id] = { status: 'done', text, cached: true }
+            if (!nextTranslations[id]?.text && typeof text === 'string' && text) nextTranslations[id] = { status: 'done', text, cached: true }
           }
-          translationsRef.current = merged
-          setTranslations(merged)
+          setProject(data)
+          setBlocks(nextBlocks)
+          translationsRef.current = nextTranslations
+          setTranslations(nextTranslations)
           if (data.changed?.length) setStatus(`${LOCALE.fileChanged}: ${data.changed.length}`)
           if (data.pdf?.exists) {
             if (data.pdf.mtime !== current.pdf?.mtime) await loadPdf(data.projectId)
@@ -2155,32 +2259,66 @@ function SidebarIcon() {
             setPdfDoc(null)
             setPdfPages(0)
           }
-          await queueTranslations(data.blocks ?? [], data.projectId)
+          await queueTranslations(nextBlocks, data.projectId)
+          return true
         } catch (refreshError) {
           if (refreshError?.name !== 'AbortError') setError(refreshError?.message || String(refreshError))
+          return false
         } finally {
           refreshRef.current = false
         }
       }, [loadPdf, queueTranslations])
 
+      // File watch. Two properties matter more than the poll interval:
+      //  - the observed signature is consumed only after a refresh succeeded,
+      //    so a transient parse error or a skipped tick is retried instead of
+      //    silently dropping the change;
+      //  - a hidden window and an in-flight check never pile up requests, which
+      //    is what made long sessions feel stuck.
       useEffect(() => {
         if (!project) return undefined
-        const timer = setInterval(async () => {
-          if (!projectRef.current || editingRef.current) return
+        let disposed = false
+        const check = async () => {
+          if (disposed || !projectRef.current) return
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+          if (statRef.current) return
+          statRef.current = true
           try {
-            const stat = await api(`/stat?projectId=${encodeURIComponent(projectRef.current.projectId)}`)
-            if (sigRef.current && stat.sig !== sigRef.current) {
+            const timeout = typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+              ? AbortSignal.timeout(10000)
+              : undefined
+            const stat = await api(`/stat?projectId=${encodeURIComponent(projectRef.current.projectId)}`, undefined, timeout)
+            if (disposed || !projectRef.current || !stat?.sig) return
+            if (!sigRef.current) {
               sigRef.current = stat.sig
-              await refreshProject()
-            } else if (!sigRef.current) {
-              sigRef.current = stat.sig
+              return
             }
+            if (stat.sig === sigRef.current) return
+            const refreshed = await refreshProject()
+            if (refreshed) sigRef.current = stat.sig
           } catch {
-            // transient network failures are ignored
+            // Transient failure: keep the old signature so the next tick retries.
+          } finally {
+            statRef.current = false
           }
-        }, 2000)
-        return () => clearInterval(timer)
-      }, [project, refreshProject])
+        }
+        const timer = setInterval(() => { void check() }, 2000)
+        const onVisibility = () => { if (document.visibilityState === 'visible') void check() }
+        document.addEventListener('visibilitychange', onVisibility)
+        return () => {
+          disposed = true
+          clearInterval(timer)
+          document.removeEventListener('visibilitychange', onVisibility)
+        }
+      }, [project?.projectId, refreshProject])
+
+      // Replay a refresh that arrived while the editor was open.
+      useEffect(() => {
+        if (editing || !pendingRefreshRef.current) return
+        pendingRefreshRef.current = false
+        void refreshProject()
+      }, [editing, refreshProject])
+
 
       const selectBlock = useCallback((id) => {
         setOrigin('click')
@@ -2209,7 +2347,10 @@ function SidebarIcon() {
       // native folder chooser directly: the picker is a separate, explicit
       // action on that screen, and the empty state offers recent projects.
       const changeProject = useCallback(() => {
+        void sessionRef.current?.flush().catch(()=>{})
+        sessionRef.current=null
         abortRef.current?.abort()
+        projectRef.current=null
         setProject(null)
         setBlocks([])
         setTranslations({})
@@ -2247,8 +2388,10 @@ function SidebarIcon() {
       const rebuttalPins = useMemo(() => {
         const pins = {}
         for (const reviewer of reviewers) {
-          for (const [index, match] of (reviewer.result?.matches ?? []).entries()) {
-            if (!match?.blockId) continue
+          for (const [index, issue] of reviewIssues(reviewer).entries()) {
+            const block = resolveMatch(issue,blocks,history)
+            if (!block) continue
+            const match = {...issue,blockId:block.id}
             if (!pins[match.blockId]) pins[match.blockId] = []
             pins[match.blockId].push({
               reviewerId: reviewer.id,
@@ -2259,9 +2402,10 @@ function SidebarIcon() {
           }
         }
         return pins
-      }, [reviewers])
+      }, [reviewers,blocks,history])
 
       const updateReviewer = useCallback((id, patch) => {
+        if (Object.hasOwn(patch,'text')) setRebuttalOverview(null)
         setReviewers((previous) => previous.map((reviewer) => (
           reviewer.id === id ? { ...reviewer, ...patch } : reviewer
         )))
@@ -2290,7 +2434,9 @@ function SidebarIcon() {
         setOverviewError('')
       }, [reviewers])
 
-      const openRebuttalForBlock = useCallback((blockId, reviewerId) => {
+      const openRebuttalForBlock = useCallback((blockId, reviewerId, issueId) => {
+        setSelectedIssue(issueId || rebuttalPins[blockId]?.find(pin => !reviewerId || pin.reviewerId===reviewerId)?.match.id)
+        setSettingsOpen(false)
         const targetId = reviewerId ?? rebuttalPins[blockId]?.[0]?.reviewerId ?? activeReviewer?.id
         if (targetId) {
           setActiveReviewerId(targetId)
@@ -2300,14 +2446,25 @@ function SidebarIcon() {
         setRebuttalOpen(true)
       }, [rebuttalPins, activeReviewer?.id, selectBlock])
 
-      const locateRebuttal = useCallback((match) => {
-        if (!match?.blockId) return
-        selectBlock(match.blockId)
-        const block = blocks.find((item) => item.id === match.blockId)
-        const reviewer = reviewers.find((item) => item.id === activeReviewerId)
-        setStatus(`${reviewer?.name ?? ''} · ${LOCALE.rebuttalLocate}: ${block?.section || block?.kind || match.blockId}`)
-        setRebuttalOpen(false)
-      }, [selectBlock, blocks, reviewers, activeReviewerId])
+      function locateRebuttal(issue) {
+        setSelectedIssue(issue.id)
+        const block = resolveMatch(issue,blocks,history)
+        if (block) selectBlock(block.id)
+      }
+
+      function changeIssue(issue, patch) {
+        const list = reviewIssues(activeReviewer).map(item => item.id===issue.id ? {...item,...patch} : item)
+        updateReviewer(activeReviewer.id,{issues:list})
+      }
+
+      function download(text,name,type) {
+        const url=URL.createObjectURL(new Blob([text],{type}))
+        const link=document.createElement('a')
+        link.href=url
+        link.download=name
+        link.click()
+        setTimeout(()=>URL.revokeObjectURL(url),1000)
+      }
 
       const runRebuttal = useCallback(async (reviewerId) => {
         const current = projectRef.current
@@ -2322,19 +2479,22 @@ function SidebarIcon() {
             target: reviewer.target,
             glossary,
           })
+          if (current.projectId!==projectRef.current?.projectId) return
           setReviewers((previous) => previous.map((item) => (
-            item.id === reviewer.id ? { ...item, result: data } : item
+            item.id === reviewer.id ? { ...item, result:data, issues:issuesFromAnalysis(data,reviewer.text,reviewIssues(item)) } : item
           )))
           if (data.totals) setUsage(data.totals)
           if (data.globalTotals) setGlobalUsage(data.globalTotals)
           setActiveReviewerId(reviewer.id)
           setRebuttalView(reviewer.id)
+          const first=reviewIssues({result:data,text:reviewer.text})[0]
+          if(first) locateRebuttal(first)
         } catch (analysisError) {
           setRebuttalError(analysisError?.message || String(analysisError))
         } finally {
           setRebuttalBusy(false)
         }
-      }, [reviewers, rebuttalBusy, overviewBusy, glossary])
+      }, [reviewers, rebuttalBusy, overviewBusy, glossary,blocks,history])
 
       const runRebuttalOverview = useCallback(async () => {
         const current = projectRef.current
@@ -2351,6 +2511,7 @@ function SidebarIcon() {
             reviewers: usable,
             target: target === 'en' ? 'en' : 'zh-CN',
           })
+          if (current.projectId!==projectRef.current?.projectId) return
           setRebuttalOverview(data)
           if (data.totals) setUsage(data.totals)
           if (data.globalTotals) setGlobalUsage(data.globalTotals)
@@ -2363,7 +2524,7 @@ function SidebarIcon() {
 
       const clearRebuttal = useCallback((reviewerId) => {
         setReviewers((previous) => previous.map((reviewer) => (
-          reviewer.id === reviewerId ? { ...reviewer, text: '', result: null } : reviewer
+          reviewer.id === reviewerId ? { ...reviewer, text: '', result: null, issues:[] } : reviewer
         )))
         setRebuttalError('')
         setRebuttalOverview(null)
@@ -2394,6 +2555,20 @@ function SidebarIcon() {
         }
       }, [sync, pdfPages])
 
+      async function locatePdfPoint(page,x,y) {
+        const current=projectRef.current
+        if (!current?.synctex) return
+        try {
+          const {location}=await api('/synctex',{projectId:current.projectId,page,x,y})
+          if (projectRef.current?.projectId!==current.projectId) return
+          if (!location?.blockId) {setStatus(label('当前 PDF 位置没有源映射','No source mapping for this PDF location'));return}
+          setOrigin('pdf')
+          setActivePage(page)
+          setActiveId(location.blockId)
+          lockRef.current=Date.now()+350
+        } catch (error) {setError(error.message)}
+      }
+
       const retranslateAll = useCallback(async () => {
         if (!projectRef.current) return
         setTranslations({})
@@ -2410,10 +2585,11 @@ function SidebarIcon() {
         await runBatch([block], current.projectId, true)
       }, [runBatch])
 
-      const openEditor = useCallback((block, mode = 'zh') => {
+      const openEditor = useCallback((block, mode = 'zh', issueLink=null) => {
         const current = translationsRef.current[block.id]
         setEditing({
-          blockId: block.id,
+          blockId: block.id, projectId:projectRef.current?.projectId,
+          original:block.source, file:block.file, fileLine:block.fileLine, section:block.section, issueLink, preview:null,
           mode,
           zhValue: current?.text ?? block.text ?? '',
           enValue: block.source ?? '',
@@ -2428,7 +2604,7 @@ function SidebarIcon() {
       useEffect(() => {
         if (!project) return undefined
         const onKey = (event) => {
-          if (event.metaKey || event.ctrlKey || event.altKey) return
+          if (editingRef.current || event.metaKey || event.ctrlKey || event.altKey) return
           const tag = event.target?.tagName
           if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || event.target?.isContentEditable) return
           const list = blocks.filter((block) => block.translatable && block.text)
@@ -2471,6 +2647,7 @@ function SidebarIcon() {
             ...draft,
             mode: 'en',
             enValue: data.englishSource ?? draft.enValue,
+            preview:data.englishSource, previewChinese:draft.mode==='zh' ? draft.zhValue : undefined,
             polishing: false,
             error: '',
           })
@@ -2480,53 +2657,64 @@ function SidebarIcon() {
         }
       }, [editing, glossary])
 
-      const saveEdit = useCallback(async () => {
-        if (!editing || editing.busy || editing.polishing) return
-        const current = projectRef.current
-        if (!current) return
-        const draft = editing
-        setEditing({ ...draft, busy: true, error: '' })
-        try {
-          const value = draft.mode === 'zh' ? draft.zhValue : draft.enValue
-          const data = await api('/block/rewrite', {
-            projectId: current.projectId,
-            blockId: draft.blockId,
-            glossary,
-            ...(draft.mode === 'zh' ? { chineseText: value } : { englishSource: value }),
-          })
-          MATH_MACROS = data.mathMacros ?? MATH_MACROS
-          setProject(data)
-          setBlocks(data.blocks ?? [])
-          const merged = { ...(translationsRef.current ?? {}) }
-          for (const [id, text] of Object.entries(data.translations ?? {})) {
-            if (typeof text === 'string' && text) merged[id] = { status: 'done', text, cached: true }
-          }
-          translationsRef.current = merged
-          setTranslations(merged)
-          if (data.usage) setUsage(data.usage)
-          if (data.globalUsage) setGlobalUsage(data.globalUsage)
-          if (data.rewrittenBlockId) setActiveId(data.rewrittenBlockId)
-          if (data.translationError && data.rewrittenBlockId) {
-            merged[data.rewrittenBlockId] = { status: 'error', error: data.translationError }
-            translationsRef.current = merged
-            setTranslations(merged)
-          }
-          if (data.translationError) {
-            setEditing({
-              ...draft,
-              blockId: data.rewrittenBlockId ?? draft.blockId,
-              busy: false,
-              error: `${LOCALE.rewriteFailed}: ${data.translationError}`,
-            })
-          } else {
-            setEditing(null)
-            setStatus(LOCALE.writeBack)
-          }
-        } catch (error) {
-          setEditing({ ...draft, busy: false, error: error?.message || String(error) })
-        }
-      }, [editing, glossary])
+      function acceptResult(data) {
+        MATH_MACROS = data.mathMacros ?? {}
+        projectRef.current = data
+        setProject(data)
+        setBlocks(data.blocks || [])
+        const merged = {...translationsRef.current}
+        for (const id of data.removed || []) delete merged[id]
+        for (const [id,text] of Object.entries(data.translations || {})) merged[id]={status:'done',text,cached:true}
+        if (data.translationError) merged[data.rewrittenBlockId]={status:'error',error:data.translationError}
+        translationsRef.current=merged
+        setTranslations(merged)
+        setHistory(data.history || [])
+        setActiveId(data.rewrittenBlockId)
+        setOrigin('click')
+        setEditing(null)
+        if (data.usage) setUsage(data.usage)
+        if (data.globalUsage) setGlobalUsage(data.globalUsage)
+        setStatus(data.translationError ? LOCALE.writeBack + ' · ' + data.translationError : LOCALE.writeBack)
+      }
 
+      async function saveEdit() {
+        if (!editing || editing.busy || editing.polishing) return
+        const draft=editing
+        const projectId=draft.projectId
+        if (projectId!==projectRef.current?.projectId || draft.preview===draft.original) return
+        const base={projectId,blockId:draft.blockId,original:draft.original,file:draft.file,fileLine:draft.fileLine,glossary}
+        setEditing({...draft,busy:true,error:''})
+        try {
+          if (draft.preview == null) {
+            const data = draft.mode === 'en' ? {englishSource:draft.enValue} :
+              await api('/block/preview',{...base,chineseText:draft.zhValue})
+            if (projectId!==projectRef.current?.projectId) return
+            if (data.totals) setUsage(data.totals)
+            if (data.globalTotals) setGlobalUsage(data.globalTotals)
+            setEditing({...draft,busy:false,preview:data.englishSource,previewChinese:draft.mode==='zh' ? draft.zhValue : undefined})
+            return
+          }
+          const data=await api('/block/rewrite',{...base,englishSource:draft.preview,chineseText:draft.previewChinese,issueLink:draft.issueLink})
+          if (projectId!==projectRef.current?.projectId) return
+          if (draft.issueLink) {
+            const revisionId=data.revisionId
+            const {reviewerId,issueId}=draft.issueLink
+            setReviewers(previous=>previous.map(r=>r.id!==reviewerId ? r : {...r,issues:reviewIssues(r).map(i=>
+              i.id!==issueId ? i : {...i,revisionIds:[...new Set([...(i.revisionIds||[]),revisionId])]})}))
+          }
+          if (draft.projectId===projectRef.current?.projectId) acceptResult(data)
+        } catch (error) { if (draft.projectId===projectRef.current?.projectId) setEditing({...draft,busy:false,error:error.message}) }
+      }
+
+      async function undoEdit(revision) {
+        const draft=editing
+        if (!draft || draft.busy) return
+        setEditing({...draft,busy:true})
+        try {
+          const data=await api('/block/undo',{projectId:project.projectId,revisionId:revision.id,glossary})
+          if (draft.projectId===projectRef.current?.projectId) acceptResult(data)
+        } catch (error) { if (draft.projectId===projectRef.current?.projectId) setEditing({...draft,busy:false,error:error.message}) }
+      }
       const compilePdf = useCallback(async () => {
         const current = projectRef.current
         if (!current || compileState.running) return
@@ -2535,7 +2723,7 @@ function SidebarIcon() {
           const result = await api('/compile', { projectId: current.projectId })
           setCompileState((previous) => ({ ...previous, running: false, log: result.log || '' }))
           if (result.ok) {
-            const refreshed = await api('/project/refresh', { projectId: current.projectId })
+            const refreshed = await api('/project/refresh', { projectId: current.projectId, target, glossary:glossaryRef.current })
             setProject(refreshed)
             setBlocks(refreshed.blocks ?? [])
             if (refreshed.pdf?.exists) await loadPdf(refreshed.projectId)
@@ -2559,11 +2747,98 @@ function SidebarIcon() {
       }, [rootInput, mainInput])
 
       const pdfAvailable = Boolean(pdfDoc || project?.pdf?.exists)
-      const showPdf = activePageDerived
+      const displayView = rebuttalOpen ? reviewPane : view
+      const pdfVisible = displayView==='pdf' || (displayView==='split' && rightMode==='pdf')
+      useEffect(()=>{
+        if (!pdfVisible || !project?.synctex || !activeId || origin==='pdf') { setSyncHit(null); return }
+        const controller=new AbortController()
+        const timer=setTimeout(()=>{
+          api('/synctex',{projectId:project.projectId,blockId:activeId},controller.signal)
+            .then(data=>{if (!controller.signal.aborted) setSyncHit(data.location ? {...data.location,id:activeId,projectId:project.projectId} : null)})
+            .catch(()=>{})
+        },130)
+        return ()=>{clearTimeout(timer);controller.abort()}
+      },[project?.projectId,project?.pdf?.mtime,project?.synctex,pdfVisible,activeId,origin])
+      const exactHit=syncHit?.id===activeId && syncHit?.projectId===project?.projectId ? syncHit : null
+      const showPdf = origin==='pdf' ? activePage : exactHit?.page || activePageDerived
+      const viewTools=<div className="pt-viewseg" role="group" aria-label={LOCALE.mode}>
+        {(rebuttalOpen ? ['translation','source','pdf'] : ['split','translation','source','pdf']).map(id=>
+          <button key={id} className={id===displayView?'on':''} aria-pressed={id===displayView}
+            onClick={()=>rebuttalOpen ? setReviewPane(id) : selectView(id)}>{LOCALE[id]}</button>)}</div>
+      const undoable = editing && history.filter(change=>!change.undone && change.afterId===editing.blockId && change.after===editing.original && change.file===editing.file).at(-1)
+      const showReview=()=>{
+        setSettingsOpen(false)
+        setRebuttalOpen(true)
+        if (rebuttalView!=='overview') {
+          const issues=reviewIssues(activeReviewer)
+          const issue=issues.find(item=>item.id===selectedIssue) ?? issues[0]
+          if(issue) locateRebuttal(issue)
+        }
+      }
+      function pickTerm(event) {
+        const selection=window.getSelection?.()
+        const value=selection?.toString().trim()
+        if (value && value.length<=120 && event.currentTarget.contains(selection.anchorNode)) setSelectedTerm(value)
+        else setSelectedTerm('')
+      }
+
+      const inlineEditor=Boolean(editing?.issueLink && rebuttalOpen)
+      const editor = editing ? (
+            <div className={inlineEditor ? 'pt-edit-inline' : 'pt-edit-mask'} onClick={() => { if (!inlineEditor && !editing.busy && !editing.polishing) setEditing(null) }}>
+              <div className="pt-edit-card" role={inlineEditor ? "region" : "dialog"} aria-label={LOCALE.editBlock} aria-modal={inlineEditor ? undefined : true} onClick={(event) => event.stopPropagation()}>
+                <span className="pt-fileline">{editing.file} · L{editing.fileLine}</span>
+                <h3>{editing.section || LOCALE.editBlock}</h3>
+                <div className="pt-edit-modes">
+                  <button className={editing.mode === 'zh' ? 'on' : ''} disabled={editing.busy || editing.polishing} onClick={() => setEditing({ ...editing, mode: 'zh', preview:null, error: '' })}>{LOCALE.editZh}</button>
+                  <button className={editing.mode === 'en' ? 'on' : ''} disabled={editing.busy || editing.polishing} onClick={() => setEditing({ ...editing, mode: 'en', preview:null, error: '' })}>{LOCALE.editEn}</button>
+                </div>
+                <div className="pt-edit-hint">{editing.mode === 'zh' ? LOCALE.zhEditHint : LOCALE.enEditHint}</div>
+                <textarea
+                  className={editing.mode === 'zh' ? 'zh' : ''}
+                  value={editing.mode === 'zh' ? editing.zhValue : editing.enValue}
+                  disabled={editing.busy || editing.polishing}
+                  autoFocus
+                  onChange={(event) => setEditing({
+                    ...editing, preview:null,previewChinese:undefined,
+                    ...(editing.mode === 'zh' ? { zhValue: event.target.value } : { enValue: event.target.value }),
+                  })}
+                  onKeyDown={(event) => {
+                    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                      event.preventDefault()
+                      saveEdit()
+                    }
+                    if (event.key === 'Escape' && !editing.busy && !editing.polishing) setEditing(null)
+                  }}
+                />
+                {editing.preview != null && <section className="pt-preview" aria-live="polite"><h4>{label('英文修订对照','Review English changes')}</h4>
+                  <Diff before={editing.original} after={editing.preview}/></section>}
+                {undoable && <button className="pt-link" disabled={editing.busy||editing.polishing} onClick={()=>undoEdit(undoable)}>{label('撤销本段上次修改','Undo last edit to this passage')}</button>}
+                {editing.error ? <div className="pt-edit-error">{editing.error}</div> : null}
+
+                <div className="pt-edit-actions">
+                  <button
+                    className="pt-btn"
+                    disabled={editing.busy || editing.polishing || !(editing.mode === 'zh' ? editing.zhValue : editing.enValue).trim()}
+                    title={LOCALE.polishHint} onClick={polishEdit}
+                  >
+                    {editing.polishing ? LOCALE.polishing : LOCALE.polish}
+                  </button>
+                  <button className="pt-btn" disabled={editing.busy || editing.polishing} onClick={() => setEditing(null)}>{LOCALE.cancel}</button>
+                  <button
+                    className="pt-btn pt-btn-primary"
+                    disabled={editing.busy || editing.polishing || editing.preview===editing.original || !(editing.mode === 'zh' ? editing.zhValue : editing.enValue).trim()}
+                    onClick={saveEdit}
+                  >
+                    {editing.busy ? LOCALE.loading : editing.preview==null ? label('预览英文改动','Preview English changes') : label('采纳并写回','Accept and write')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null
 
       return (
-        <div className="pt-root">
-          <style>{CSS}</style>
+        <div className={"pt-root"+(serif?" pt-serif":"")+(rebuttalOpen?" pt-reviewing":"")}>
+          <style>{CSS + revisionStyles}</style>
           <CommandBar
             project={project}
             view={view}
@@ -2578,11 +2853,9 @@ function SidebarIcon() {
             picking={picking}
             onRetranslate={retranslateAll}
             onCompile={compilePdf}
-            onSettings={() => setSettingsOpen(true)}
-            onRebuttal={() => {
-              setRebuttalView(activeReviewer?.id ?? 'overview')
-              setRebuttalOpen(true)
-            }}
+            reviewing={rebuttalOpen} onRead={()=>{setRebuttalOpen(false);setSettingsOpen(false)}}
+            onSettings={() => {setRebuttalOpen(false);setSettingsOpen(true)}}
+            onRebuttal={showReview}
             onPick={pickDirectory}
             onScan={scan}
             onOpen={() => openProject()}
@@ -2594,7 +2867,7 @@ function SidebarIcon() {
             onChangeProject={changeProject}
           />
           {error ? <div className="pt-banner err">{error}</div> : null}
-          {status ? <div className="pt-banner warn">{status}</div> : null}
+          {status ? <div className="pt-banner pt-status-note" role="status">{status}</div> : null}
           {project?.warnings?.length ? (
             <div className="pt-banner warn">
               {LOCALE.warnings}: {project.warnings.slice(0, 3).map((warning) => warning.message).join(' · ')}
@@ -2603,10 +2876,10 @@ function SidebarIcon() {
           <div className="pt-body">
             {project ? (
               <>
-                <div className="pt-main" data-we-surface="v1">
-                  {view === 'split' ? (
+                <div className="pt-main" data-we-surface="v1" onMouseUp={pickTerm} onKeyUp={pickTerm}>
+                  {inlineEditor ? editor : displayView === 'split' ? (
                     <>
-                      <Pane title={LOCALE.translation}>
+                      <Pane title={LOCALE.translation} tools={viewTools}>
                         <TranslationPane
                           blocks={blocks}
                           translations={translations}
@@ -2630,15 +2903,15 @@ function SidebarIcon() {
                         )}
                       >
                         {rightMode === 'pdf' ? (
-                          <PdfPane pdfDoc={pdfDoc} pdfPages={pdfPages} activePage={showPdf} origin={origin} onVisiblePage={handleVisiblePage} zoom={pdfZoom} onZoom={changeZoom} />
+                          <PdfPane hit={exactHit} onPoint={locatePdfPoint} pdfDoc={pdfDoc} pdfPages={pdfPages} activePage={showPdf} origin={origin} onVisiblePage={handleVisiblePage} zoom={pdfZoom} onZoom={changeZoom} />
                         ) : (
                           <SourcePane source={project.source} blocks={blocks} activeId={activeId} origin={origin} onSelect={selectBlock} onVisible={(id) => handleVisible(id, 'source')} onEdit={openEditor} rebuttalPins={rebuttalPins} onRebuttal={openRebuttalForBlock} />
                         )}
                       </Pane>
                     </>
                   ) : (
-                    <Pane title={view === 'pdf' ? LOCALE.pdf : view === 'source' ? LOCALE.source : LOCALE.translation}>
-                      {view === 'translation' ? (
+                    <Pane tools={viewTools} title={displayView === 'pdf' ? LOCALE.pdf : displayView === 'source' ? LOCALE.source : LOCALE.translation}>
+                      {displayView === 'translation' ? (
                         <TranslationPane
                           blocks={blocks}
                           translations={translations}
@@ -2651,10 +2924,10 @@ function SidebarIcon() {
                           rebuttalPins={rebuttalPins}
                           onRebuttal={openRebuttalForBlock}
                         />
-                      ) : view === 'source' ? (
+                      ) : displayView === 'source' ? (
                         <SourcePane source={project.source} blocks={blocks} activeId={activeId} origin={origin} onSelect={selectBlock} onVisible={(id) => handleVisible(id, 'source')} onEdit={openEditor} rebuttalPins={rebuttalPins} onRebuttal={openRebuttalForBlock} />
                       ) : (
-                        <PdfPane pdfDoc={pdfDoc} pdfPages={pdfPages} activePage={showPdf} origin={origin} onVisiblePage={handleVisiblePage} zoom={pdfZoom} onZoom={changeZoom} />
+                        <PdfPane hit={exactHit} onPoint={locatePdfPoint} pdfDoc={pdfDoc} pdfPages={pdfPages} activePage={showPdf} origin={origin} onVisiblePage={handleVisiblePage} zoom={pdfZoom} onZoom={changeZoom} />
                       )}
                     </Pane>
                   )}
@@ -2662,11 +2935,24 @@ function SidebarIcon() {
                 {rebuttalOpen ? (
                   <RebuttalDrawer
                     reviewers={reviewers}
+                    editing={Boolean(editing)} selectedIssue={selectedIssue} activeBlock={activeBlock} history={history} onIssueChange={changeIssue} onIssue={locateRebuttal} onEdit={openEditor}
+                    onGroup={(id,quote)=>{
+                      const r=reviewers.find(item=>item.id===id)
+                      setActiveReviewerId(id);setRebuttalView(id)
+                      const issue=reviewIssues(r).find(item=>quote && (item.quote.includes(quote)||quote.includes(item.quote)))
+                      if(issue) locateRebuttal(issue)
+                    }}
+                    recovery={recovery} onRecovery={()=>download(JSON.stringify(recovery,null,2),'paper-lens-local-draft.json','application/json')}
+                    onExport={()=>download(responseMarkdown(reviewers,blocks,history,project.title),project.mainFile.split('/').pop().replace(/\.tex$/i,'.response.md'),'text/markdown;charset=utf-8')}
                     activeId={activeReviewer?.id}
                     view={rebuttalView}
                     onSelectView={(id) => {
                       setRebuttalView(id)
-                      if (id !== 'overview') setActiveReviewerId(id)
+                      if (id !== 'overview') {
+                        setActiveReviewerId(id)
+                        const issue=reviewIssues(reviewers.find(r=>r.id===id))[0]
+                        if(issue) locateRebuttal(issue)
+                      }
                     }}
                     onAddReviewer={addReviewer}
                     onRemoveReviewer={removeReviewer}
@@ -2686,6 +2972,8 @@ function SidebarIcon() {
                 ) : null}
                 {settingsOpen ? (
                   <SettingsDrawer
+                    blocks={blocks} translations={translations} selectedTerm={glossaryTerm} onLocate={selectBlock}
+                    serif={serif} onSerif={value=>{setSerif(value);localStorage.setItem('paperTranslator.serif',value?'1':'0')}}
                     target={target}
                     setTarget={setTarget}
                     glossaryText={glossaryText}
@@ -2735,6 +3023,7 @@ function SidebarIcon() {
           </div>
           {project ? (
             <div className="pt-statusbar">
+              {selectedTerm && <button className="pt-btn pt-mini" onClick={()=>{setGlossaryTerm(selectedTerm);setSelectedTerm('');setSettingsOpen(true);setRebuttalOpen(false)}}>{label('加入项目术语','Add to glossary')} · {selectedTerm.slice(0,25)}</button>}
               <button className="pt-usage" aria-expanded={usageOpen} onClick={() => setUsageOpen((value) => !value)}>
                 {blocks.filter((block) => block.translatable).length} {LOCALE.blocksUnit} · {LOCALE.cached} {progress.cached} · ≈ {formatUsd(usage.costUsd)}
                 <span className="pt-caret" aria-hidden="true">▴</span>
@@ -2760,54 +3049,7 @@ function SidebarIcon() {
               ) : null}
             </div>
           ) : null}
-          {editing ? (
-            <div className="pt-edit-mask" onClick={() => { if (!editing.busy) setEditing(null) }}>
-              <div className="pt-edit-card" onClick={(event) => event.stopPropagation()}>
-                <h3>{LOCALE.editBlock}</h3>
-                <div className="pt-edit-modes">
-                  <button className={editing.mode === 'zh' ? 'on' : ''} disabled={editing.busy || editing.polishing} onClick={() => setEditing({ ...editing, mode: 'zh', error: '' })}>{LOCALE.editZh}</button>
-                  <button className={editing.mode === 'en' ? 'on' : ''} disabled={editing.busy || editing.polishing} onClick={() => setEditing({ ...editing, mode: 'en', error: '' })}>{LOCALE.editEn}</button>
-                </div>
-                <div className="pt-edit-hint">{editing.mode === 'zh' ? LOCALE.zhEditHint : LOCALE.enEditHint}</div>
-                <textarea
-                  className={editing.mode === 'zh' ? 'zh' : ''}
-                  value={editing.mode === 'zh' ? editing.zhValue : editing.enValue}
-                  disabled={editing.busy || editing.polishing}
-                  autoFocus
-                  onChange={(event) => setEditing({
-                    ...editing,
-                    ...(editing.mode === 'zh' ? { zhValue: event.target.value } : { enValue: event.target.value }),
-                  })}
-                  onKeyDown={(event) => {
-                    if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
-                      event.preventDefault()
-                      saveEdit()
-                    }
-                    if (event.key === 'Escape' && !editing.busy) setEditing(null)
-                  }}
-                />
-                {editing.error ? <div className="pt-edit-error">{editing.error}</div> : null}
-                <div className="pt-edit-hint">{LOCALE.polishHint}</div>
-                <div className="pt-edit-actions">
-                  <button
-                    className="pt-btn"
-                    disabled={editing.busy || editing.polishing || !(editing.mode === 'zh' ? editing.zhValue : editing.enValue).trim()}
-                    onClick={polishEdit}
-                  >
-                    {editing.polishing ? LOCALE.polishing : LOCALE.polish}
-                  </button>
-                  <button className="pt-btn" disabled={editing.busy || editing.polishing} onClick={() => setEditing(null)}>{LOCALE.cancel}</button>
-                  <button
-                    className="pt-btn pt-btn-primary"
-                    disabled={editing.busy || editing.polishing || !(editing.mode === 'zh' ? editing.zhValue : editing.enValue).trim()}
-                    onClick={saveEdit}
-                  >
-                    {editing.busy ? LOCALE.rewriting : LOCALE.saveTranslate}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : null}
+          {inlineEditor ? null : editor}
           {compileState.log && compileState.visible !== false ? (
             <div className="pt-banner warn">
               <div className="pt-banner-head">
